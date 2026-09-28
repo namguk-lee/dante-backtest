@@ -184,13 +184,58 @@ def fetch_one(rec: dict, start: pd.Timestamp, end: pd.Timestamp, cache_dir: Path
             "cached": False, "error": last_error}
 
 
+def _listing_has_symbol(df: pd.DataFrame | None) -> bool:
+    return (
+        isinstance(df, pd.DataFrame)
+        and not df.empty
+        and _first_existing(df, ["Symbol", "Code"]) is not None
+    )
+
+
 def load_universe(start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    ko = normalize_listing(fdr.StockListing("KOSPI"), "KO", True)
-    kq = normalize_listing(fdr.StockListing("KOSDAQ"), "KQ", True)
+    ko_raw = fdr.StockListing("KOSPI")
+    kq_raw = fdr.StockListing("KOSDAQ")
+    print("KOSPI listing:", getattr(ko_raw, "shape", None), list(getattr(ko_raw, "columns", [])), flush=True)
+    print("KOSDAQ listing:", getattr(kq_raw, "shape", None), list(getattr(kq_raw, "columns", [])), flush=True)
+    ko = normalize_listing(ko_raw, "KO", True)
+    kq = normalize_listing(kq_raw, "KQ", True)
+
+    raw_de = None
     try:
-        raw_de = fdr.StockListing("KRX-DELISTING", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
-    except TypeError:
-        raw_de = fdr.StockListing("KRX-DELISTING")
+        raw_de = fdr.StockListing(
+            "KRX-DELISTING",
+            start.strftime("%Y-%m-%d"),
+            end.strftime("%Y-%m-%d"),
+        )
+        print(
+            "KRX-DELISTING ranged:",
+            getattr(raw_de, "shape", None),
+            list(getattr(raw_de, "columns", [])),
+            flush=True,
+        )
+    except Exception as exc:
+        print("KRX-DELISTING ranged failed:", repr(exc), flush=True)
+
+    if not _listing_has_symbol(raw_de):
+        print("KRX-DELISTING ranged unavailable; retrying full listing", flush=True)
+        try:
+            raw_de = fdr.StockListing("KRX-DELISTING")
+            print(
+                "KRX-DELISTING full:",
+                getattr(raw_de, "shape", None),
+                list(getattr(raw_de, "columns", [])),
+                flush=True,
+            )
+        except Exception as exc:
+            print("KRX-DELISTING full failed:", repr(exc), flush=True)
+            raw_de = None
+
+    if not _listing_has_symbol(raw_de):
+        raise RuntimeError(
+            "KRX-DELISTING universe unavailable from FinanceDataReader. "
+            "Refusing active-only backtest because it would introduce survivorship bias."
+        )
+
     de = normalize_listing(raw_de, None, False)
     de = de[de["delisting_date"].isna() | (de["delisting_date"] >= start)].copy()
 
