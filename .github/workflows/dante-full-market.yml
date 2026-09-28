@@ -47,20 +47,19 @@ jobs:
 
       - run: pip install -r research/dante/requirements.txt
 
-      - name: Restore per-listing OHLCV cache
+      - name: Restore marcap yearly cache
         uses: actions/cache@v4
         with:
-          path: krx_data/symbols
-          key: krx-symbols-v2-${{ runner.os }}-${{ env.DATA_START }}-${{ env.DATA_END }}
+          path: marcap_cache
+          key: marcap-2016-2025-v1
           restore-keys: |
-            krx-symbols-v2-${{ runner.os }}-${{ env.DATA_START }}-
-            krx-symbols-v2-${{ runner.os }}-
+            marcap-2016-2025-
 
-      - name: Collect KRX active + delisted OHLCV
+      - name: Build survivorship-aware KOSPI/KOSDAQ panel
         run: >-
-          python research/dante/collect_krx_full_ohlcv.py
+          python research/dante/collect_marcap_full_market.py
           --start "$DATA_START" --end "$DATA_END"
-          --out krx_data --workers 2 --retries 4 --max-failure-rate 0.15
+          --out krx_data --cache marcap_cache --refresh-end-year
 
       - name: Run full-market stop comparison
         run: >-
@@ -89,4 +88,3 @@ jobs:
           path: |
             dante_results/
             krx_data/universe.csv
-            krx_data/collection_log.csv
