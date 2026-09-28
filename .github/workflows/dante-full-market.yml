@@ -39,18 +39,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Expand research engine
-        run: |
-          mkdir -p research/dante/engine
-          python -m zipfile -e research/dante/dante_backtest_engine_v3_1.zip research/dante/engine
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: 'pip'
-          cache-dependency-path: research/dante/engine/requirements.txt
+          cache-dependency-path: research/dante/requirements.txt
 
-      - run: pip install -r research/dante/engine/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
 
       - name: Restore per-listing OHLCV cache
         uses: actions/cache@v4
@@ -63,13 +58,13 @@ jobs:
 
       - name: Collect KRX active + delisted OHLCV
         run: >-
-          python research/dante/engine/collect_krx_full_ohlcv.py
+          python research/dante/collect_krx_full_ohlcv.py
           --start "$DATA_START" --end "$DATA_END"
           --out krx_data --workers 2 --retries 4 --max-failure-rate 0.15
 
       - name: Run full-market stop comparison
         run: >-
-          python research/dante/engine/dante_full_market_backtest_v3.py
+          python research/dante/dante_full_market_backtest_v3.py
           --ko krx_data/ko_eod.parquet
           --kq krx_data/kq_eod.parquet
           --out dante_results
