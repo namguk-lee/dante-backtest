@@ -1,0 +1,97 @@
+name: Dante full-market backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_start:
+        description: 'Warm-up data start (YYYY-MM-DD)'
+        required: true
+        default: '2016-01-01'
+      signal_start:
+        description: 'First signal date (YYYY-MM-DD)'
+        required: true
+        default: '2018-01-01'
+      end:
+        description: 'Data end (YYYY-MM-DD)'
+        required: true
+        default: '2026-09-29'
+  push:
+    branches: [main]
+    paths:
+      - 'research/dante/**'
+      - '.github/workflows/dante-full-market.yml'
+
+concurrency:
+  group: dante-full-market-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATA_START: ${{ inputs.data_start || '2016-01-01' }}
+  SIGNAL_START: ${{ inputs.signal_start || '2018-01-01' }}
+  DATA_END: ${{ inputs.end || '2026-09-29' }}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Expand research engine
+        run: |
+          mkdir -p research/dante/engine
+          python -m zipfile -e research/dante/dante_backtest_engine_v3_1.zip research/dante/engine
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: research/dante/engine/requirements.txt
+
+      - run: pip install -r research/dante/engine/requirements.txt
+
+      - name: Restore per-listing OHLCV cache
+        uses: actions/cache@v4
+        with:
+          path: krx_data/symbols
+          key: krx-symbols-v2-${{ runner.os }}-${{ env.DATA_START }}-${{ env.DATA_END }}
+          restore-keys: |
+            krx-symbols-v2-${{ runner.os }}-${{ env.DATA_START }}-
+            krx-symbols-v2-${{ runner.os }}-
+
+      - name: Collect KRX active + delisted OHLCV
+        run: >-
+          python research/dante/engine/collect_krx_full_ohlcv.py
+          --start "$DATA_START" --end "$DATA_END"
+          --out krx_data --workers 2 --retries 4 --max-failure-rate 0.15
+
+      - name: Run full-market stop comparison
+        run: >-
+          python research/dante/engine/dante_full_market_backtest_v3.py
+          --ko krx_data/ko_eod.parquet
+          --kq krx_data/kq_eod.parquet
+          --out dante_results
+          --signal-start "$SIGNAL_START"
+          --roundtrip-cost-bps 0
+
+      - name: Print TEST summary
+        if: success()
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          x = pd.read_csv('dante_results/split_comparison.csv')
+          print(x[x['split'].eq('TEST')].to_string(index=False))
+          PY
+
+      - name: Upload research results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-full-market-results-${{ github.run_number }}
+          retention-days: 30
+          path: |
+            dante_results/
+            krx_data/universe.csv
+            krx_data/collection_log.csv
