@@ -170,9 +170,11 @@ def main():
         q=panel[(panel.name.astype(str).str.strip()==name)&(panel.date<=lab["analysis_date"])].copy()
         if q.empty:
             misses.append({**lab,"reason":"name_not_found"}); continue
-        counts=q.groupby("series_id").size().sort_values(ascending=False)
-        sid=counts.index[0]
-        g=q[q.series_id.eq(sid)].sort_values("date")
+        sid=q.groupby("series_id").date.max().idxmax()
+        g=panel[panel.series_id.eq(sid)&(panel.date<=lab["analysis_date"])].sort_values("date")
+        market_date=pd.Timestamp(g.iloc[-1].date)
+        if (pd.Timestamp(lab["analysis_date"])-market_date).days>7:
+            misses.append({**lab,"reason":"stale_history","market_date":market_date}); continue
         f=one_features(g,pd.Timestamp(lab["analysis_date"]))
         if not f:
             misses.append({**lab,"reason":"feature_failed"}); continue

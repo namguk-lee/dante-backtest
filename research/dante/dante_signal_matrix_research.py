@@ -192,7 +192,11 @@ def candle_line_distance_pct(line,low,high):
     return abs(edge/line-1)*100
 
 def concrete_proxy(z):
-    """Transparent approximation: prior swing high breaks, then holds on retest."""
+    """Causal research proxy: confirmed pivot -> breakout -> later retest.
+
+    Existing 0.5%/3%/2% research tolerances are unchanged. A closing
+    breach after breakout invalidates that cycle; recovery does not erase it.
+    """
     if len(z)<90:return (False,np.nan,pd.NaT,pd.NaT)
     w=z.tail(90).copy()
     # Search resistance before the most recent 15 sessions.
@@ -204,11 +208,12 @@ def concrete_proxy(z):
     # Prefer the latest meaningful pivot that was later broken.
     for idx,row in ph.sort_index(ascending=False).iterrows():
         level=float(row.ah)
-        after=w.loc[idx+1:]
+        after=w.loc[idx+4:]  # 7-bar pivot is only known three bars later.
         br=after[after.ac>level*1.005]
         if br.empty:continue
         bi=int(br.index[0])
-        post=w.loc[bi:]
+        post=w.loc[bi+1:]  # The breakout candle cannot retest itself.
+        if post.empty or (post.ac<level*.98).any():continue
         rt=post[(post.al<=level*1.03)&(post.ac>=level*.98)]
         if rt.empty:continue
         ri=int(rt.index[0])
@@ -216,10 +221,11 @@ def concrete_proxy(z):
         if alive:return (True,level,w.loc[bi,"date"],w.loc[ri,"date"])
     return (False,np.nan,pd.NaT,pd.NaT)
 
-def scan(z,min_turnover):
-    if len(z)<520:return None
+def scan(z,min_turnover,apply_universe_filter=True):
+    if z.empty:return None
+    if apply_universe_filter and len(z)<520:return None
     cur=z.iloc[-1]
-    if pd.isna(cur.ema448) or pd.isna(cur.amount20) or cur.amount20<min_turnover:return None
+    if apply_universe_filter and (pd.isna(cur.ema448) or pd.isna(cur.amount20) or cur.amount20<min_turnover):return None
 
     # ---------- Publicly described structures ----------
     cross5_112=last_cross_days(z,"ema5","ema112",120)
@@ -312,7 +318,14 @@ def scan(z,min_turnover):
         "research_concrete_proxy":conc,
     }
     # Do not count correlated context/support proxies as independent public techniques.
-    technique_count=sum(technique_flags.values())
+    technique_raw_count=sum(technique_flags.values())
+    # Overlapping detector labels are retained, but each MA-recovery stage
+    # contributes at most once. These families are not statistical independence.
+    technique_families={
+        "RECOVERY_112":sig_256_long or sig_ma_hit_112_224,
+        "RECOVERY_224":sig_ma_hit_224_448 or sig_bowl3,
+    }
+    technique_count=sum(technique_families.values())
     context_count=sum(context_flags.values())
     # Share proxy remains a ranking proxy. Blue-dot BB35 stays visible only
     # as broad chart context because historical validation was not robust.
@@ -323,7 +336,7 @@ def scan(z,min_turnover):
     broad_context_count=int(conc)+int(sig_blue)
     total=technique_count+proxy_count+support_count
     # Keep direct public search-context matches even when no other detector fires.
-    if total<1 and context_count<1:return None
+    if apply_universe_filter and total<1 and context_count<1:return None
 
     all_flags={**technique_flags,**context_flags,**proxy_flags,**support_flags}
     labels=[k.replace("public_","").replace("research_","").replace("_proxy","") for k,v in all_flags.items() if v and k!="research_blue_dot_bb35_recent5"]
@@ -334,6 +347,8 @@ def scan(z,min_turnover):
         "current_close":float(cur.close),"avg_turnover20":float(cur.amount20),
         **technique_flags,**context_flags,**proxy_flags,**support_flags,
         "public_technique_count":technique_count,
+        "public_technique_raw_count":technique_raw_count,
+        "public_technique_families":";".join(k for k,v in technique_families.items() if v),
         "public_context_count":context_count,
         "public_signal_count":technique_count,
         "research_proxy_count":proxy_count,

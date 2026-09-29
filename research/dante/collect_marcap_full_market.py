@@ -74,6 +74,9 @@ def load_year(path,start,end):
     x["Date"]=pd.to_datetime(x["Date"],errors="coerce")
     x=x[(x["Date"]>=start)&(x["Date"]<=end)]
     x["Market"]=x["Market"].astype(str).str.upper()
+    # marcap records the KOSDAQ Global segment separately. It remains part
+    # of the KOSDAQ universe; excluding it creates multi-year history gaps.
+    x["Market"]=x["Market"].replace({"KOSDAQ GLOBAL":"KOSDAQ"})
     x=x[x["Market"].isin(["KOSPI","KOSDAQ"])].copy()
     if ratio_col: x=x.rename(columns={ratio_col:"reported_change_pct"})
     else: x["reported_change_pct"]=np.nan
