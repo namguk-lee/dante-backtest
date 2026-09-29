@@ -1028,7 +1028,7 @@ def extract_public_case_features(panel):
     """Recalculate public-example dates with the same transparent feature engine."""
     if "code" not in panel.columns:return pd.DataFrame()
     raw=panel.copy()
-    raw["code_norm"]=raw["code"].astype(str).str.extract(r"(\\d+)")[0].str.zfill(6)
+    raw["code_norm"]=raw["code"].astype(str).str.replace(r"\\.0$","",regex=True).str.zfill(6)
     out=[]
     for case in PUBLIC_CASES:
         target=pd.Timestamp(case["analysis_date"])
