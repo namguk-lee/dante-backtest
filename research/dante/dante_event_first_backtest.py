@@ -43,6 +43,7 @@ def feat(g):
     rng=(g.ah-g.al).replace(0,np.nan)
     g["close_pos"]=(g.ac-g.al)/rng
     g["upper_wick"]=(g.ah-np.maximum(g.ao,g.ac))/rng
+    g["cross112"]=(g.ac>g.ema112)&(g.ac.shift(1)<=g.ema112.shift(1))
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["below80"]=(g.ac<g.ema224).shift(1).rolling(80,min_periods=80).sum()
     g["prior1_high"]=g.ah.shift(1)
@@ -243,6 +244,16 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
     rec.update(public_112_224_turn_context(z,signal_i,event_i))
     if context:
         rec.update(context)
+    if kind.startswith("E112_") and context:
+        stop=float(context.get("anchor_price_adj",np.nan))
+        target=float(context.get("target224_signal",np.nan))
+        ema112_signal=float(z.at[signal_i,"ema112"]) if pd.notna(z.at[signal_i,"ema112"]) else np.nan
+        support_stop=max(stop,ema112_signal*.98) if math.isfinite(ema112_signal) else stop
+        rec["anchor_stop_adj"]=stop
+        rec["support112_stop_adj"]=support_stop
+        for h in (20,60):
+            rec.update(simulate_path(z,entry_i,entry,stop,target,h,cost))
+            rec.update(simulate_close_stop(z,entry_i,entry,support_stop,target,h,cost,"support112"))
     if (kind=="E3_CLASSIC_PULLBACK" or kind.startswith("E4_REACCEL")) and context:
         stop=float(context.get("anchor_price_adj",np.nan))
         target=float(context.get("target448_signal",np.nan))
@@ -266,7 +277,9 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
 
 def scan_one(g,start,cost):
     z=feat(g)
-    rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999,
+    rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,
+                      "E112_RECOVERY":-999,"E112_SETTLED2":-999,"E112_PULLBACK":-999,
+                      "E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999,
                       "E4_REACCEL_UP":-999,"E4_REACCEL_BULL":-999,
                       "E4_REACCEL_1D":-999,"E4_REACCEL_3D":-999,"E4_REACCEL_5D":-999}
     start_i=max(500,int(z.index[z.date>=start][0]) if (z.date>=start).any() else len(z))
@@ -287,6 +300,90 @@ def scan_one(g,start,cost):
             add_event(rows,z,"E1_BOWL_EVENT",i,i,cost); cooldown["E1_BOWL_EVENT"]=i
 
         anchor=float(r.ao)
+
+        # Parallel public 112-line branch (transparent approximation).
+        # Public examples repeatedly describe: reverse alignment -> strong/accumulation
+        # candle -> settlement above EMA112 -> small hill/concrete/pullback, with EMA224
+        # overhead as the next resistance/target. Exact proprietary blue-dot/watermelon
+        # formulas are intentionally not inferred here.
+        event_vol=float(r.volume)
+        cross112_i=None
+        for j in range(i,min(i+21,len(z)-1)):
+            post=z.iloc[i:j+1]
+            if int((post.ac<anchor).sum())>1:break
+            if bool(z.at[j,"cross112"]) and pd.notna(z.at[j,"ema224"]) and float(z.at[j,"ac"])<float(z.at[j,"ema224"]):
+                cross112_i=j
+                break
+        if cross112_i is not None:
+            ctx112={
+                "event_to_112_days":int(cross112_i-i),
+                "dist112_signal":float(z.at[cross112_i,"ac"]/z.at[cross112_i,"ema112"]-1) if z.at[cross112_i,"ema112"]>0 else np.nan,
+                "headroom224_signal":float(z.at[cross112_i,"ema224"]/z.at[cross112_i,"ac"]-1) if z.at[cross112_i,"ac"]>0 else np.nan,
+                "ema112_slope20_at_signal":float(z.at[cross112_i,"ema112_slope20"]) if pd.notna(z.at[cross112_i,"ema112_slope20"]) else np.nan,
+                "anchor_price_adj":anchor,
+                "target224_signal":float(z.at[cross112_i,"ema224"]) if pd.notna(z.at[cross112_i,"ema224"]) else np.nan,
+            }
+            if cross112_i-cooldown["E112_RECOVERY"]>=40:
+                add_event(rows,z,"E112_RECOVERY",cross112_i,i,cost,context=ctx112)
+                cooldown["E112_RECOVERY"]=cross112_i
+
+            # "안착" has no public numeric formula. Test a plainly labeled two-close
+            # proxy rather than claiming it is Dante's proprietary definition.
+            settled_i=None
+            for j in range(cross112_i,min(i+21,len(z)-1)):
+                if j<1:continue
+                if int((z.iloc[i:j+1].ac<anchor).sum())>1:break
+                if any(pd.isna(z.at[j,k]) for k in ["ema112","ema224"]):continue
+                settled=bool(
+                    z.at[j,"ac"]>=z.at[j,"ema112"] and
+                    z.at[j-1,"ac"]>=z.at[j-1,"ema112"] and
+                    z.at[j,"ac"]<z.at[j,"ema224"]
+                )
+                if settled:
+                    settled_i=j
+                    break
+            if settled_i is not None:
+                settle_ctx=dict(ctx112)
+                settle_ctx.update({
+                    "event_to_112_days":int(settled_i-i),
+                    "cross112_to_settle_days":int(settled_i-cross112_i),
+                    "dist112_signal":float(z.at[settled_i,"ac"]/z.at[settled_i,"ema112"]-1) if z.at[settled_i,"ema112"]>0 else np.nan,
+                    "headroom224_signal":float(z.at[settled_i,"ema224"]/z.at[settled_i,"ac"]-1) if z.at[settled_i,"ac"]>0 else np.nan,
+                    "ema112_slope20_at_signal":float(z.at[settled_i,"ema112_slope20"]) if pd.notna(z.at[settled_i,"ema112_slope20"]) else np.nan,
+                    "target224_signal":float(z.at[settled_i,"ema224"]),
+                })
+                if settled_i-cooldown["E112_SETTLED2"]>=40:
+                    add_event(rows,z,"E112_SETTLED2",settled_i,i,cost,context=settle_ctx)
+                    cooldown["E112_SETTLED2"]=settled_i
+
+                pull112_i=None
+                post_high=-np.inf
+                for j in range(settled_i+1,min(settled_i+16,len(z)-1)):
+                    post_high=max(post_high,float(z.at[j,"ah"]))
+                    if float(z.at[j,"ac"])<anchor:break
+                    if any(pd.isna(z.at[j,k]) for k in ["ema112","ema224"]):continue
+                    dd=float(z.at[j,"ac"]/post_high-1) if post_high>0 else 0
+                    volcool=float(z.at[j,"volume"])<=event_vol*.60
+                    in_free_line=bool(z.at[j,"ac"]>=z.at[j,"ema112"] and z.at[j,"ac"]<z.at[j,"ema224"])
+                    if in_free_line and -.20<=dd<=-.03 and volcool:
+                        pull112_i=j
+                        break
+                if pull112_i is not None:
+                    pull112_ctx=dict(settle_ctx)
+                    pull112_ctx.update({
+                        "settle_to_pull112_days":int(pull112_i-settled_i),
+                        "event_to_112_days":int(pull112_i-i),
+                        "dist112_signal":float(z.at[pull112_i,"ac"]/z.at[pull112_i,"ema112"]-1) if z.at[pull112_i,"ema112"]>0 else np.nan,
+                        "headroom224_signal":float(z.at[pull112_i,"ema224"]/z.at[pull112_i,"ac"]-1) if z.at[pull112_i,"ac"]>0 else np.nan,
+                        "ema112_slope20_at_signal":float(z.at[pull112_i,"ema112_slope20"]) if pd.notna(z.at[pull112_i,"ema112_slope20"]) else np.nan,
+                        "pull112_drawdown":float(z.at[pull112_i,"ac"]/post_high-1) if post_high>0 else np.nan,
+                        "pull112_volume_event_ratio":float(z.at[pull112_i,"volume"]/event_vol) if event_vol>0 else np.nan,
+                        "target224_signal":float(z.at[pull112_i,"ema224"]),
+                    })
+                    if pull112_i-cooldown["E112_PULLBACK"]>=40:
+                        add_event(rows,z,"E112_PULLBACK",pull112_i,i,cost,context=pull112_ctx)
+                        cooldown["E112_PULLBACK"]=pull112_i
+
         # Stage 2: first EMA224 recovery after the event, while anchor remains alive.
         cross_i=None
         for j in range(i,min(i+21,len(z)-1)):
@@ -755,6 +852,49 @@ def summarize_public_112_224_turn(ev):
         out.append(rec)
     return pd.DataFrame(out)
 
+def summarize_public_112_entry_path(ev):
+    """Summarize the public 112 settlement branch without promoting a winner."""
+    if ev.empty:return pd.DataFrame()
+    kinds=["E112_RECOVERY","E112_SETTLED2","E112_PULLBACK"]
+    x=ev[ev["kind"].isin(kinds)].copy()
+    if x.empty:return pd.DataFrame()
+    out=[]
+    for (sp,kind),q in x.groupby(["split","kind"],dropna=False,observed=True):
+        rec={
+            "split":sp,"kind":kind,"n":len(q),
+            "median_event_to_signal_days":pd.to_numeric(q.get("event_to_112_days"),errors="coerce").median(),
+            "median_headroom224":pd.to_numeric(q.get("headroom224_signal"),errors="coerce").median(),
+            "median_ema112_slope20":pd.to_numeric(q.get("ema112_slope20_at_signal"),errors="coerce").median(),
+        }
+        for h in (20,60):
+            s=pd.to_numeric(q[f"ret{h}"],errors="coerce").dropna()
+            rec[f"n{h}"]=len(s)
+            rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+            rec[f"median{h}"]=s.median() if len(s) else np.nan
+            rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            valid=q[(q[f"path{h}_valid"]==True)&(q[f"path{h}_full_horizon"]==True)].copy()
+            if len(valid):
+                outcome=valid[f"path{h}_outcome"].astype(str)
+                rec[f"anchor_target{h}"]=(outcome=="TARGET").mean()
+                rec[f"anchor_stop{h}"]=outcome.str.startswith("STOP").mean()
+                rec[f"anchor_pathmean{h}"]=valid[f"path{h}_net_return"].mean()
+                rec[f"anchor_pathmedian{h}"]=valid[f"path{h}_net_return"].median()
+            else:
+                rec[f"anchor_target{h}"]=np.nan; rec[f"anchor_stop{h}"]=np.nan
+                rec[f"anchor_pathmean{h}"]=np.nan; rec[f"anchor_pathmedian{h}"]=np.nan
+            support=q[(q[f"support112{h}_valid"]==True)&(q[f"support112{h}_full_horizon"]==True)].copy()
+            if len(support):
+                outcome=support[f"support112{h}_outcome"].astype(str)
+                rec[f"support_target{h}"]=(outcome=="TARGET").mean()
+                rec[f"support_stop{h}"]=outcome.str.startswith("STOP").mean()
+                rec[f"support_pathmean{h}"]=support[f"support112{h}_net_return"].mean()
+                rec[f"support_pathmedian{h}"]=support[f"support112{h}_net_return"].median()
+            else:
+                rec[f"support_target{h}"]=np.nan; rec[f"support_stop{h}"]=np.nan
+                rec[f"support_pathmean{h}"]=np.nan; rec[f"support_pathmedian{h}"]=np.nan
+        out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -806,6 +946,8 @@ def main():
     bowlctx.to_csv(a.out/"event_first_public_bowl_duration.csv",index=False,encoding="utf-8-sig")
     turn112224=summarize_public_112_224_turn(ev)
     turn112224.to_csv(a.out/"event_first_public_112_224_turn.csv",index=False,encoding="utf-8-sig")
+    entry112=summarize_public_112_entry_path(ev)
+    entry112.to_csv(a.out/"event_first_public_112_entry_path.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -866,5 +1008,19 @@ def main():
                   "median_ema112_slope20","median_ema224_slope20"]:
             if c in show:show[c]=(show[c]*100).round(2)
         print("\n=== PUBLIC 112/224 TURN CONTEXT ===")
+        print(show.to_string(index=False))
+    if not entry112.empty:
+        show=entry112.copy()
+        pctcols=[
+            "median_headroom224","median_ema112_slope20","mean20","median20","win20",
+            "anchor_target20","anchor_stop20","anchor_pathmean20","anchor_pathmedian20",
+            "support_target20","support_stop20","support_pathmean20","support_pathmedian20",
+            "mean60","median60","win60","anchor_target60","anchor_stop60",
+            "anchor_pathmean60","anchor_pathmedian60","support_target60","support_stop60",
+            "support_pathmean60","support_pathmedian60",
+        ]
+        for c in pctcols:
+            if c in show:show[c]=(show[c]*100).round(2)
+        print("\n=== PUBLIC 112 SETTLEMENT / PULLBACK PATH TO EMA224 (%) ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
