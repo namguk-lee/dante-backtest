@@ -13,7 +13,7 @@ import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from dante_signal_matrix_research import load, features
+from dante_signal_matrix_research import load, features, candle_line_distance_pct
 
 TECHS=("256_LONG","MA_HIT_112_224","MA_HIT_224_448","BOWL3_STRUCTURE","PUBLIC_CONFLUENCE_2PLUS")
 
@@ -90,6 +90,17 @@ def add_event(rows,z,i,tech):
             pd.notna(cur.vr20) and cur.vr20<=1.2 and
             z.iloc[max(0,i-19):i+1].vr20.notna().any() and
             float(z.iloc[max(0,i-19):i+1].vr20.max())>=2.0
+        ),
+        "blue_current":bool(
+            pd.notna(cur.bb35_upper2) and
+            candle_line_distance_pct(float(cur.bb35_upper2),float(cur.al),float(cur.ah))<=1.0
+        ),
+        "blue_recent5":bool(
+            any(
+                pd.notna(z.at[j,"bb35_upper2"]) and
+                candle_line_distance_pct(float(z.at[j,"bb35_upper2"]),float(z.at[j,"al"]),float(z.at[j,"ah"]))<=1.0
+                for j in range(max(0,i-4),i+1)
+            )
         ),
         "dist112_pct":float((cur.ac/cur.ema112-1)*100) if pd.notna(cur.ema112) else np.nan,
         "dist224_pct":float((cur.ac/cur.ema224-1)*100) if pd.notna(cur.ema224) else np.nan,
@@ -180,6 +191,8 @@ def summarize_evidence_filter(events):
         ("TURNED_UP",events.ma_turn_quality.eq("TURNED_UP")),
         ("ACCUM_COOL",events.accum_cool.eq(True)),
         ("TURNED_UP_ACCUM_COOL",events.ma_turn_quality.eq("TURNED_UP")&events.accum_cool.eq(True)),
+        ("TURNED_UP_ACCUM_COOL_BLUE5",
+         events.ma_turn_quality.eq("TURNED_UP")&events.accum_cool.eq(True)&events.blue_recent5.eq(True)),
     )
     for tech in TECHS:
         for split in ("TRAIN_2021_2023","VALID_2024_2025","TEST_2026","ALL"):
@@ -221,7 +234,7 @@ def main():
     show=summary[summary.turn_quality.eq("ALL")]
     print(show.to_string(index=False))
     print("\n=== PRE-REGISTERED EVIDENCE FILTER ===")
-    key=filt[filt.variant.isin(["BASE","TURNED_UP_ACCUM_COOL"])]
+    key=filt[filt.variant.isin(["BASE","TURNED_UP_ACCUM_COOL","TURNED_UP_ACCUM_COOL_BLUE5"])]
     print(key.to_string(index=False))
 
 if __name__=="__main__":
