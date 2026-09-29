@@ -37,7 +37,8 @@ jobs:
           --out krx_signal_matrix
           --cache marcap_signal_matrix_cache
           --refresh-end-year
-          --freshen-with-pykrx
+          --freshen-with-naver
+          --naver-workers 12
           --max-stale-calendar-days 3
       - name: Run research signal matrix
         run: >-
