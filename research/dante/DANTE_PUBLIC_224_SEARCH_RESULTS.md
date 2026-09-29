@@ -65,3 +65,36 @@ Every match keeps:
 
 Do not rank this board by historical return or label it BUY.
 Use it to identify the small current set of names sitting in the publicly described long-below-224 / near-224 context, then inspect which other documented structures are also present.
+
+
+## Delayed recovery -> pullback validation
+
+A second test asked whether the direct public EMA224 search context becomes useful if entry is delayed until:
+
+1. price first recovers EMA224 after at least 80 consecutive sessions below it,
+2. then, within 20 sessions, price makes the first quiet pullback near EMA224,
+3. recent closes show settlement above EMA224,
+4. current volume is <= 1.2x the 20-session average.
+
+This is a transparent research approximation, not a proprietary Dante formula.
+
+GitHub Actions:
+- run: https://github.com/namguk-lee/dante-backtest/actions/runs/36634214065
+- commit tested: 9bb4b02026b202e11c04d2a4d07a7cad742207fa
+- primary tolerance: 5%
+- cost: 50bp deducted from forward returns
+
+| Split | Events | 5d mean / median | 20d mean / median | 60d mean / median |
+|---|---:|---:|---:|---:|
+| TRAIN 2021-2023 | 347 | -1.39% / -1.73% | -4.06% / -4.77% | -8.80% / -10.32% |
+| VALID 2024-2025 | 218 | -1.34% / -2.18% | -3.23% / -5.70% | -6.10% / -8.04% |
+| TEST 2026 | 20 | +1.74% / -0.15% | -9.98% / -9.58% | -29.73% / -33.05% |
+| ALL | 585 | -1.27% / -1.89% | -3.94% / -5.13% | -8.37% / -10.29% |
+
+Adding the prior-volume/current-cooling context did not improve robustness. Sensitivity checks at 3%, 5%, and 8% pullback tolerances remained negative out of sample.
+
+Conclusion:
+- **Reject** generic "long below EMA224 -> reclaim -> first quiet EMA224 pullback" as a standalone entry rule.
+- The positive 2026 five-day mean is based on a tiny sample and has a slightly negative median; it is followed by strongly negative 20/60-day results.
+- Keep the public 224 rule as a discovery context only.
+- Continue testing richer public structure (Bowl duration, anchor/accumulation, recovery, and post-pullback re-acceleration) rather than optimizing the 224 tolerance.
