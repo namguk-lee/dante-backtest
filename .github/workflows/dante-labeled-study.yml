@@ -1,0 +1,53 @@
+name: Dante labeled example study
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dante-labeled-study.yml'
+      - 'research/dante/dante_labeled_feature_study.py'
+      - 'research/dante/dante_official_examples.csv'
+  workflow_dispatch:
+
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - name: Restore labeled-study marcap cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_labeled_cache
+          key: marcap-labeled-2022-2026-v1
+          restore-keys: |
+            marcap-labeled-
+      - name: Build historical full-market panel
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2022-01-01"
+          --out krx_labeled
+          --cache marcap_labeled_cache
+          --refresh-end-year
+      - name: Extract features at official analysis dates
+        run: >-
+          python research/dante/dante_labeled_feature_study.py
+          --ko krx_labeled/ko_eod.parquet
+          --kq krx_labeled/kq_eod.parquet
+          --labels research/dante/dante_official_examples.csv
+          --out dante_labeled_study
+      - name: Upload labeled study
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-labeled-study-${{ github.run_number }}
+          retention-days: 30
+          path: dante_labeled_study/
