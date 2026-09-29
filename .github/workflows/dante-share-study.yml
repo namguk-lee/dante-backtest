@@ -51,9 +51,9 @@ jobs:
           name: dante-share-geometry-${{ github.run_number }}
           retention-days: 30
           path: |
-            dante_share_study/share_1to1_geometry_v2.csv
-            dante_share_study/share_1to1_metric_summary_v2.csv
-            dante_share_study/share_1to1_misses_v2.csv
+            dante_share_study/share_1to1_geometry_v3.csv
+            dante_share_study/share_1to1_metric_summary_v3.csv
+            dante_share_study/share_1to1_misses_v2.csv\n            dante_share_study/share_1to1_all_structural_crosses_v3.csv
             dante_share_study/charts/
 
       - name: Run matched-market proxy control study
