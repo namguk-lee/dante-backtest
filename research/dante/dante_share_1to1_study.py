@@ -23,6 +23,7 @@ from pathlib import Path
 import math
 import numpy as np
 import pandas as pd
+import FinanceDataReader as fdr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -60,6 +61,84 @@ def feat(g,ma_n):
 def safe_ratio(a,b):
     if pd.isna(a) or pd.isna(b) or b==0:return np.nan
     return float(a/b)
+
+def fetch_fallback(code,name,analysis_date):
+    """Fallback only for labeled research cases missing from the local panel."""
+    try:
+        end=(pd.Timestamp(analysis_date)+pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        q=fdr.DataReader("NAVER:"+str(code).zfill(6),"2022-01-01",end)
+        if q is None or q.empty:return pd.DataFrame()
+        q=q.reset_index(); q.columns=[str(x).lower() for x in q.columns]
+        q["date"]=pd.to_datetime(q["date"],errors="coerce")
+        for col in ("open","high","low","close","volume"):
+            q[col]=pd.to_numeric(q[col],errors="coerce")
+        q=q.dropna(subset=["date","open","high","low","close","volume"])
+        q["adjusted_close"]=q["close"]
+        q["code"]=str(code).zfill(6); q["name"]=name
+        q["exchange"]="FALLBACK"; q["series_id"]="FALLBACK:"+str(code).zfill(6)
+        return q[q.date<=pd.Timestamp(analysis_date)].sort_values("date")
+    except Exception:
+        return pd.DataFrame()
+
+def prior_down_cross(z,cross_i,ma_n):
+    """Last meaningful transition from above-MA to below-MA before the recovery cross."""
+    start=max(1,cross_i-max(120,ma_n*3))
+    cand=[]
+    for i in range(start,cross_i):
+        if pd.isna(z.at[i,"ma"]) or pd.isna(z.at[i-1,"ma"]):continue
+        if z.at[i,"ac"]<z.at[i,"ma"] and z.at[i-1,"ac"]>=z.at[i-1,"ma"]:
+            nxt=z.iloc[i:min(i+7,cross_i)]
+            if len(nxt) and float((nxt.ac<nxt.ma).mean())>=.60:
+                cand.append(i)
+    return cand[-1] if cand else None
+
+def cycle_features(z,cross_i,ma_n):
+    """Measure the structurally selected sell->buy cycle around the reference MA."""
+    dc=prior_down_cross(z,cross_i,ma_n)
+    if dc is None:
+        start=max(0,cross_i-max(60,ma_n))
+    else:
+        start=dc
+    seg=z.iloc[start:].copy()
+    seg=seg[pd.notna(seg.ma)]
+    pre=z.iloc[start:cross_i].copy()
+    post=z.iloc[cross_i:].copy()
+    pre=pre[pd.notna(pre.ma)]; post=post[pd.notna(post.ma)]
+    out={
+        "cycle_start_i":start,
+        "cycle_start_date":z.at[start,"date"] if start<len(z) else pd.NaT,
+        "cycle_down_cross_date":z.at[dc,"date"] if dc is not None else pd.NaT,
+        "cycle_days":len(seg),
+        "cycle_pre_days":len(pre),
+        "cycle_post_days":len(post),
+    }
+    if seg.empty:return out
+    above=int((seg.ac>=seg.ma).sum()); below=int((seg.ac<seg.ma).sum())
+    out["cycle_count_ratio"]=safe_ratio(above,below)
+    out["cycle_above_share"]=safe_ratio(above,len(seg))
+    up_area=float(seg.dist.clip(lower=0).sum()); dn_area=float((-seg.dist).clip(lower=0).sum())
+    out["cycle_area_ratio"]=safe_ratio(up_area,dn_area)
+    up_mean=float(seg.loc[seg.dist>0,"dist"].mean()) if (seg.dist>0).any() else np.nan
+    dn_mean=float((-seg.loc[seg.dist<0,"dist"]).mean()) if (seg.dist<0).any() else np.nan
+    out["cycle_mean_dist_ratio"]=safe_ratio(up_mean,dn_mean)
+    neg_depth=float((-pre.dist).clip(lower=0).max()) if not pre.empty else np.nan
+    pos_current=float(max(0,z.iloc[-1].dist))
+    pos_max=float(post.dist.clip(lower=0).max()) if not post.empty else np.nan
+    out["cycle_height_current_ratio"]=safe_ratio(pos_current,neg_depth)
+    out["cycle_height_max_ratio"]=safe_ratio(pos_max,neg_depth)
+    out["cycle_duration_ratio"]=safe_ratio(len(post),len(pre))
+    if not pre.empty:
+        low_i=int(pre.al.idxmin())
+        out["cycle_low_date"]=z.at[low_i,"date"]
+        out["cycle_low_to_analysis_days"]=len(z)-1-low_i
+        out["cycle_downcross_to_low_days"]=low_i-start
+        out["cycle_time_symmetry_ratio"]=safe_ratio(len(z)-1-low_i,low_i-start)
+    else:
+        out["cycle_low_date"]=pd.NaT
+        out["cycle_low_to_analysis_days"]=np.nan
+        out["cycle_downcross_to_low_days"]=np.nan
+        out["cycle_time_symmetry_ratio"]=np.nan
+    return out
 
 def structural_up_crosses(z,ma_n,lookback=None):
     """Ignore one-day whipsaws: require a meaningful sell-side share before cross."""
@@ -168,6 +247,7 @@ def geometry(z,cross_i,ma_n):
     }
     out.update(broad)
     out.update(window_share_features(z))
+    out.update(cycle_features(z,cross_i,ma_n))
     return out
 
 def choose_cross(z,ma_n):
@@ -242,6 +322,10 @@ def main():
         q=panel[(panel.code.eq(case["code"]))&(panel.date<=case["analysis_date"])].copy()
         if q.empty:
             q=panel[(panel.name.eq(str(case["stock"]).strip()))&(panel.date<=case["analysis_date"])].copy()
+        used_fallback=False
+        if q.empty:
+            q=fetch_fallback(case["code"],case["stock"],case["analysis_date"])
+            used_fallback=not q.empty
         if q.empty:
             misses.append({**case,"reason":"stock_not_found"});continue
         sid=q.groupby("series_id").size().sort_values(ascending=False).index[0]
@@ -251,20 +335,33 @@ def main():
             # Count/share metrics do not require a structural cross, so retain case.
             g=window_share_features(z)
             g.update({"cross_i":np.nan,"cross_date":pd.NaT,"pre_start_date":pd.NaT,"pre_end_date":pd.NaT,"post_end_date":pd.NaT})
-        rec={**case,**g,"series_id":sid,"market_date":z.iloc[-1].date,"num_structural_crosses":len(allg)}
+        rec={**case,**g,"series_id":sid,"market_date":z.iloc[-1].date,"num_structural_crosses":len(allg),"used_fallback":used_fallback}
         rows.append(rec)
         if pd.notna(rec.get("cross_i")):render(z,case,rec,a.out/"charts")
     out=pd.DataFrame(rows)
-    out.to_csv(a.out/"share_1to1_geometry_v2.csv",index=False,encoding="utf-8-sig")
+    out.to_csv(a.out/"share_1to1_geometry_v3.csv",index=False,encoding="utf-8-sig")
+    all_cross_rows=[]
+    for case in cases.to_dict("records"):
+        q=panel[(panel.code.eq(case["code"]))&(panel.date<=case["analysis_date"])].copy()
+        if q.empty:
+            q=fetch_fallback(case["code"],case["stock"],case["analysis_date"])
+        if q.empty:continue
+        sid=q.groupby("series_id").size().sort_values(ascending=False).index[0]
+        z=feat(q[q.series_id.eq(sid)].sort_values("date"),int(case["share_ma"]))
+        for rank,(cross_i,bshare,ashare) in enumerate(structural_up_crosses(z,int(case["share_ma"])),1):
+            gg=geometry(z,cross_i,int(case["share_ma"]))
+            if gg:
+                all_cross_rows.append({**case,**gg,"candidate_rank":rank,"pre_below_share_at_cross":bshare,"post_above_share_at_cross":ashare})
+    pd.DataFrame(all_cross_rows).to_csv(a.out/"share_1to1_all_structural_crosses_v3.csv",index=False,encoding="utf-8-sig")
     pd.DataFrame(misses).to_csv(a.out/"share_1to1_misses_v2.csv",index=False,encoding="utf-8-sig")
     s=metric_summary(out) if not out.empty else pd.DataFrame()
-    s.to_csv(a.out/"share_1to1_metric_summary_v2.csv",index=False,encoding="utf-8-sig")
+    s.to_csv(a.out/"share_1to1_metric_summary_v3.csv",index=False,encoding="utf-8-sig")
     print(f"cases={len(cases)} matched={len(out)} misses={len(misses)}")
     print("\\n=== CASES ===")
     show=["analysis_date","stock","code","share_ma","label","market_date","cross_date","num_structural_crosses"]
     for w in (60,112,120,224,252,448):
         if f"count_ratio_{w}" in out.columns:show.append(f"count_ratio_{w}")
-    for m in ("count_ratio_full_valid","ratio_broad_depth_halfma_current","ratio_broad_depth_1ma_current","ratio_broad_depth_2ma_current","ratio_cross_ma_current"):
+    for m in ("cycle_count_ratio","cycle_area_ratio","cycle_mean_dist_ratio","cycle_height_current_ratio","cycle_height_max_ratio","cycle_duration_ratio","cycle_time_symmetry_ratio","count_ratio_full_valid","ratio_broad_depth_halfma_current","ratio_broad_depth_1ma_current","ratio_broad_depth_2ma_current","ratio_cross_ma_current"):
         if m in out.columns:show.append(m)
     print(out[show].to_string(index=False))
     print("\\n=== BEST METRICS (confirmed only) ===")
