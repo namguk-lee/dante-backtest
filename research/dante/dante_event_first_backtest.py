@@ -197,6 +197,31 @@ def public_bowl_duration_context(z,i):
     })
     return out
 
+def public_112_224_turn_context(z,signal_i,event_i):
+    """Public 112/224 reverse-to-positive transition context.
+
+    Official public material describes the point where EMA112 changes from below
+    EMA224 to above it as an 'upward departure' signal. This function records
+    whether that structural transition has happened since the qualifying event.
+    It is diagnostic only and does not alter entries.
+    """
+    out={
+        "signal_ema112_slope20":float(z.at[signal_i,"ema112_slope20"]) if pd.notna(z.at[signal_i,"ema112_slope20"]) else np.nan,
+        "signal_112_above224":False,
+        "cross112_224_since_event":False,
+        "days_since_cross112_224":np.nan,
+    }
+    if any(pd.isna(z.at[signal_i,k]) for k in ["ema112","ema224"]):return out
+    out["signal_112_above224"]=bool(z.at[signal_i,"ema112"]>=z.at[signal_i,"ema224"])
+    cross=((z.ema112>=z.ema224)&(z.ema112.shift(1)<z.ema224.shift(1))).fillna(False)
+    lo=max(0,int(event_i)); hi=min(int(signal_i),len(z)-1)
+    ids=np.flatnonzero(cross.iloc[lo:hi+1].to_numpy())
+    if len(ids):
+        last_cross=lo+int(ids[-1])
+        out["cross112_224_since_event"]=True
+        out["days_since_cross112_224"]=int(signal_i-last_cross)
+    return out
+
 def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
     entry_i=signal_i+1
     if entry_i>=len(z):return
@@ -215,6 +240,7 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
          "signal_gap112_224":float(abs(z.at[signal_i,"ema224"]-z.at[signal_i,"ema112"])/z.at[signal_i,"ema224"]) if pd.notna(z.at[signal_i,"ema224"]) and z.at[signal_i,"ema224"]>0 and pd.notna(z.at[signal_i,"ema112"]) else np.nan,
          "signal_headroom448":float(z.at[signal_i,"ema448"]/z.at[signal_i,"ac"]-1) if pd.notna(z.at[signal_i,"ema448"]) and z.at[signal_i,"ac"]>0 else np.nan}
     rec.update(public_bowl_duration_context(z,signal_i))
+    rec.update(public_112_224_turn_context(z,signal_i,event_i))
     if context:
         rec.update(context)
     if (kind=="E3_CLASSIC_PULLBACK" or kind.startswith("E4_REACCEL")) and context:
@@ -692,6 +718,43 @@ def summarize_public_bowl_duration(ev):
         out.append(rec)
     return pd.DataFrame(out)
 
+def summarize_public_112_224_turn(ev):
+    """Compare E3/E4 outcomes before vs after the public 112/224 structural turn."""
+    if ev.empty:return pd.DataFrame()
+    kinds=["E3_CLASSIC_PULLBACK","E4_REACCEL_UP","E4_REACCEL_BULL",
+           "E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"]
+    x=ev[ev["kind"].isin(kinds)].copy()
+    if x.empty:return pd.DataFrame()
+    x["public_112_224_state"]=np.select(
+        [
+            x["cross112_224_since_event"].fillna(False),
+            x["signal_112_above224"].fillna(False),
+        ],
+        [
+            "CROSSED_112_ABOVE_224_SINCE_EVENT",
+            "112_ABOVE_224_PREEXISTING",
+        ],
+        default="112_BELOW_224",
+    )
+    out=[]
+    for (sp,kind,state),q in x.groupby(
+        ["split","kind","public_112_224_state"],dropna=False,observed=True
+    ):
+        rec={
+            "split":sp,"kind":kind,"state":state,"n":len(q),
+            "median_days_since_cross":pd.to_numeric(q["days_since_cross112_224"],errors="coerce").median(),
+            "median_ema112_slope20":pd.to_numeric(q["signal_ema112_slope20"],errors="coerce").median(),
+            "median_ema224_slope20":pd.to_numeric(q["signal_ema224_slope20"],errors="coerce").median(),
+        }
+        for h in (20,60):
+            s=pd.to_numeric(q[f"ret{h}"],errors="coerce").dropna()
+            rec[f"n{h}"]=len(s)
+            rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+            rec[f"median{h}"]=s.median() if len(s) else np.nan
+            rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+        out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -741,6 +804,8 @@ def main():
     e4.to_csv(a.out/"event_first_e4_confirmation.csv",index=False,encoding="utf-8-sig")
     bowlctx=summarize_public_bowl_duration(ev)
     bowlctx.to_csv(a.out/"event_first_public_bowl_duration.csv",index=False,encoding="utf-8-sig")
+    turn112224=summarize_public_112_224_turn(ev)
+    turn112224.to_csv(a.out/"event_first_public_112_224_turn.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -794,5 +859,12 @@ def main():
         if "median_base_to_decline_ratio" in show:
             show["median_base_to_decline_ratio"]=show["median_base_to_decline_ratio"].round(2)
         print("\n=== PUBLIC BOWL DURATION CONTEXT (BOWL-2 >= BOWL-1) ===")
+        print(show.to_string(index=False))
+    if not turn112224.empty:
+        show=turn112224.copy()
+        for c in ["mean20","median20","win20","mean60","median60","win60",
+                  "median_ema112_slope20","median_ema224_slope20"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        print("\n=== PUBLIC 112/224 TURN CONTEXT ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
