@@ -74,6 +74,23 @@ def split_name(dt):
     if y==2026:return "TEST_2026"
     return "OTHER"
 
+def below224_run_before_recovery(z,i):
+    """Consecutive sessions below EMA224 before the current recovery/approach."""
+    e=z.ema224
+    if i<0 or i>=len(z) or pd.isna(e.iloc[i]):return np.nan
+    if z.ac.iloc[i]<e.iloc[i]:
+        j=i; n=0
+        while j>=0 and pd.notna(e.iloc[j]) and z.ac.iloc[j]<e.iloc[j]:
+            n+=1; j-=1
+        return n
+    cross=(z.ac>=e)&(z.ac.shift(1)<e.shift(1))
+    ids=np.flatnonzero(cross.iloc[:i+1].fillna(False).to_numpy())
+    if not len(ids):return np.nan
+    ci=int(ids[-1]); j=ci-1; n=0
+    while j>=0 and pd.notna(e.iloc[j]) and z.ac.iloc[j]<e.iloc[j]:
+        n+=1; j-=1
+    return n
+
 def add_event(rows,z,i,tech):
     cur=z.iloc[i]
     rec={
@@ -105,6 +122,7 @@ def add_event(rows,z,i,tech):
         "dist112_pct":float((cur.ac/cur.ema112-1)*100) if pd.notna(cur.ema112) else np.nan,
         "dist224_pct":float((cur.ac/cur.ema224-1)*100) if pd.notna(cur.ema224) else np.nan,
         "dist448_pct":float((cur.ac/cur.ema448-1)*100) if pd.notna(cur.ema448) else np.nan,
+        "below224_run_before_recovery":below224_run_before_recovery(z,i),
     }
     entry=float(cur.ac)
     for h in (5,20,60):
@@ -215,6 +233,48 @@ def summarize_evidence_filter(events):
                 rows.append(rec)
     return pd.DataFrame(rows)
 
+def summarize_bowl_public_filters(events):
+    """Validate publicly described Bowl-3 search conditions without hard-coding them first.
+
+    Public conditions tested:
+    - price near EMA224 (±10%)
+    - roughly four months / 80 trading sessions below EMA224 before recovery
+    """
+    rows=[]
+    base_all=events[events.technique.eq("BOWL3_STRUCTURE")]
+    for split in ("TRAIN_2021_2023","VALID_2024_2025","TEST_2026","ALL"):
+        base=base_all if split=="ALL" else base_all[base_all.split.eq(split)]
+        if base.empty:continue
+        variants=(
+            ("BASE",pd.Series(True,index=base.index)),
+            ("NEAR224_10",base.dist224_pct.between(-10,10)),
+            ("BELOW224_80",pd.to_numeric(base.below224_run_before_recovery,errors="coerce")>=80),
+            ("NEAR10_BELOW80",
+             base.dist224_pct.between(-10,10)&
+             (pd.to_numeric(base.below224_run_before_recovery,errors="coerce")>=80)),
+            ("TURNED_ACCUM_NEAR10_BELOW80",
+             base.ma_turn_quality.eq("TURNED_UP")&
+             base.accum_cool.eq(True)&
+             base.dist224_pct.between(-10,10)&
+             (pd.to_numeric(base.below224_run_before_recovery,errors="coerce")>=80)),
+        )
+        for variant,mask in variants:
+            q=base[mask.fillna(False)]
+            if q.empty:continue
+            rec={"split":split,"variant":variant,"events":len(q)}
+            for h in (5,20,60):
+                v=pd.to_numeric(q[f"ret{h}_net50bp_pct"],errors="coerce").dropna()
+                rec[f"n{h}"]=len(v)
+                rec[f"mean{h}_net_pct"]=float(v.mean()) if len(v) else np.nan
+                rec[f"median{h}_net_pct"]=float(v.median()) if len(v) else np.nan
+                rec[f"win{h}_pct"]=float((v>0).mean()*100) if len(v) else np.nan
+                mae=pd.to_numeric(q.loc[v.index,f"mae{h}_pct"],errors="coerce").dropna() if len(v) else pd.Series(dtype=float)
+                mfe=pd.to_numeric(q.loc[v.index,f"mfe{h}_pct"],errors="coerce").dropna() if len(v) else pd.Series(dtype=float)
+                rec[f"median_mae{h}_pct"]=float(mae.median()) if len(mae) else np.nan
+                rec[f"median_mfe{h}_pct"]=float(mfe.median()) if len(mfe) else np.nan
+            rows.append(rec)
+    return pd.DataFrame(rows)
+
 def main():
     a=args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -230,12 +290,16 @@ def main():
     summary.to_csv(a.out/"public_technique_summary.csv",index=False,encoding="utf-8-sig")
     filt=summarize_evidence_filter(events)
     filt.to_csv(a.out/"public_technique_filter_summary.csv",index=False,encoding="utf-8-sig")
+    bowl_filters=summarize_bowl_public_filters(events)
+    bowl_filters.to_csv(a.out/"bowl3_public_filter_summary.csv",index=False,encoding="utf-8-sig")
     print(f"events={len(events)} series={events.code.nunique()}")
     show=summary[summary.turn_quality.eq("ALL")]
     print(show.to_string(index=False))
     print("\n=== PRE-REGISTERED EVIDENCE FILTER ===")
     key=filt[filt.variant.isin(["BASE","TURNED_UP_ACCUM_COOL","TURNED_UP_ACCUM_COOL_BLUE5"])]
     print(key.to_string(index=False))
+    print("\n=== BOWL3 PUBLIC CONDITIONS ===")
+    print(bowl_filters.to_string(index=False))
 
 if __name__=="__main__":
     main()
