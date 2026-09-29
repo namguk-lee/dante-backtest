@@ -36,12 +36,15 @@ jobs:
           --out krx_recent
           --cache marcap_recent_cache
           --refresh-end-year
-      - name: Overlay latest closed KRX sessions
+      - name: Refresh plausible candidates to latest completed session
         run: >-
-          python research/dante/overlay_latest_pykrx.py
+          python research/dante/refresh_recent_candidates_fdr.py
           --ko krx_recent/ko_eod.parquet
           --kq krx_recent/kq_eod.parquet
           --out krx_latest
+          --workers 6
+          --min-turnover 1000000000
+          --max-candidates 500
 
       - name: Scan recommendation candidates
         run: >-
