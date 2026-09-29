@@ -109,7 +109,7 @@ def fetch_recent(rec,start,end,retries):
             if any(c not in q.columns for c in need):raise ValueError(f"columns={list(q.columns)}")
             q["date"]=pd.to_datetime(q.date,errors="coerce")
             for c in need[1:]+(["change"] if "change" in q.columns else []):q[c]=pd.to_numeric(q[c],errors="coerce")
-            q=q.dropna(subset=need); q=q[(q.date>start)&(q.date<=end)]
+            q=q.dropna(subset=need); q=q[(q.date>=start)&(q.date<=end)]
             q["amount"]=q.close*q.volume
             return rec["series_id"],q.sort_values("date"),None
         except Exception as exc:
@@ -118,7 +118,12 @@ def fetch_recent(rec,start,end,retries):
 
 def stitch_one(hist,q):
     if q.empty:return hist
-    prev=hist.iloc[-1]; raw=float(prev.close); adj=float(prev.adjusted_close); rows=[]
+    q=q.sort_values("date").drop_duplicates("date",keep="last").copy()
+    qstart=pd.Timestamp(q.date.min())
+    older=hist[hist.date<qstart].sort_values("date").copy()
+    if older.empty:
+        return hist
+    prev=older.iloc[-1]; raw=float(prev.close); adj=float(prev.adjusted_close); rows=[]
     for rec in q.to_dict("records"):
         rr=float(rec["close"]/raw-1) if raw>0 else 0.0
         ch=rec.get("change",np.nan)
@@ -131,7 +136,7 @@ def stitch_one(hist,q):
             "adjusted_close":adj,"volume":rec["volume"],"amount":rec["amount"]
         })
         raw=float(rec["close"])
-    out=pd.concat([hist,pd.DataFrame(rows)],ignore_index=True,sort=False)
+    out=pd.concat([older,pd.DataFrame(rows)],ignore_index=True,sort=False)
     return out.sort_values("date").drop_duplicates("date",keep="last")
 
 def classify(z,event_date):
@@ -212,9 +217,10 @@ def main():
     if stage1.empty:
         pd.DataFrame().to_csv(a.out/"event_first_candidates.csv",index=False); return
 
+    refresh_start=base_date-pd.Timedelta(days=120)
     results=[]
     with ThreadPoolExecutor(max_workers=a.workers) as pool:
-        futs=[pool.submit(fetch_recent,r,base_date,target,a.retries) for r in stage1.to_dict("records")]
+        futs=[pool.submit(fetch_recent,r,refresh_start,target,a.retries) for r in stage1.to_dict("records")]
         for i,f in enumerate(as_completed(futs),1):
             results.append(f.result())
             if i%50==0 or i==len(futs):print(f"refresh {i}/{len(futs)}",flush=True)
@@ -225,9 +231,29 @@ def main():
         hist=panel[panel.series_id.eq(rec["series_id"])].sort_values("date").copy()
         q,err=res.get(rec["series_id"],(pd.DataFrame(),"missing"))
         z=feat(stitch_one(hist,q))
-        c=classify(z,rec["event_date"])
-        if not c:continue
-        rows.append({**rec,**c,"refresh_error":err})
+        tail=z.tail(a.event_lookback)
+        ev=tail[event_mask(tail,a)]
+        if ev.empty:continue
+        e=ev.iloc[-1]
+        refreshed_rec={
+            **rec,
+            "event_date":e.date,
+            "event_open":float(e.open),
+            "event_close":float(e.close),
+            "event_ret_pct":float(e.ret1*100),
+            "event_body_pct":float(e.body*100),
+            "event_volume_ratio":float(e.vr),
+            "event_close_pos":float(e.close_pos),
+            "event_upper_wick":float(e.upper_wick),
+            "event_amount20":float(e.amount20),
+            "event_above_prior20_high":bool(e.ac>e.prior20_high if pd.notna(e.prior20_high) else False),
+            "event_cross224":bool(e.cross224),
+            "event_ema224":float(e.ema224) if pd.notna(e.ema224) else np.nan,
+            "recent_high_from_event":float(z.loc[e.name:,"ah"].max()) if e.name in z.index else float(e.ah),
+        }
+        cc=classify(z,e.date)
+        if not cc:continue
+        rows.append({**refreshed_rec,**cc,"refresh_error":err})
     out=pd.DataFrame(rows)
     if not out.empty:
         out=out.sort_values(["score","event_date"],ascending=[False,False]).reset_index(drop=True)
