@@ -106,6 +106,49 @@ def simulate_path(z,entry_i,entry,stop,target,horizon,cost):
     out[p+"r_multiple"]=float(net_ret/risk_pct) if risk_pct>0 else np.nan
     return out
 
+
+def simulate_close_stop(z,entry_i,entry,stop,target,horizon,cost,prefix):
+    """End-of-day support failure; target is a resting intraday limit, stop exits next open."""
+    p=f"{prefix}{horizon}_"
+    out={
+        p+"valid":False,p+"full_horizon":False,p+"outcome":"INVALID",
+        p+"days":np.nan,p+"net_return":np.nan,p+"r_multiple":np.nan,
+        p+"mfe":np.nan,p+"mae":np.nan,
+    }
+    if not all(math.isfinite(v) for v in [entry,stop,target]) or not(stop<entry<target):
+        return out
+    end_i=entry_i+horizon
+    full=end_i<len(z)
+    last_i=min(end_i,len(z)-1)
+    if last_i<entry_i:return out
+    path=z.iloc[entry_i:last_i+1]
+    out[p+"valid"]=True
+    out[p+"full_horizon"]=full
+    out[p+"mfe"]=float(path["ah"].max()/entry-1)
+    out[p+"mae"]=float(path["al"].min()/entry-1)
+    outcome="TIMEOUT" if full else "OPEN_INCOMPLETE"
+    exit_price=float(z.at[last_i,"ac"])
+    days=int(last_i-entry_i)
+    for j in range(entry_i,last_i+1):
+        if bool(float(z.at[j,"ah"])>=target):
+            outcome="TARGET"
+            exit_price=target
+            days=int(j-entry_i)
+            break
+        if bool(float(z.at[j,"ac"])<stop):
+            exit_j=j+1 if j+1<len(z) else j
+            outcome="STOP_CLOSE"
+            exit_price=float(z.at[exit_j,"ao"]) if exit_j>j else float(z.at[j,"ac"])
+            days=int(exit_j-entry_i)
+            break
+    net_ret=float(exit_price/entry-1-cost)
+    risk_pct=float((entry-stop)/entry)
+    out[p+"outcome"]=outcome
+    out[p+"days"]=days
+    out[p+"net_return"]=net_ret
+    out[p+"r_multiple"]=float(net_ret/risk_pct) if risk_pct>0 else np.nan
+    return out
+
 def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
     entry_i=signal_i+1
     if entry_i>=len(z):return
@@ -128,8 +171,16 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
     if kind in ("E3_CLASSIC_PULLBACK","E4_REACCELERATION") and context:
         stop=float(context.get("anchor_price_adj",np.nan))
         target=float(context.get("target448_signal",np.nan))
+        ema224_signal=float(z.at[signal_i,"ema224"]) if pd.notna(z.at[signal_i,"ema224"]) else np.nan
+        support_stop=max(stop,ema224_signal*.98) if math.isfinite(ema224_signal) else stop
+        rec["anchor_stop_adj"]=stop
+        rec["support_stop_adj"]=support_stop
         rec.update(simulate_path(z,entry_i,entry,stop,target,20,cost))
         rec.update(simulate_path(z,entry_i,entry,stop,target,60,cost))
+        rec.update(simulate_close_stop(z,entry_i,entry,stop,target,20,cost,"anchorclose"))
+        rec.update(simulate_close_stop(z,entry_i,entry,stop,target,60,cost,"anchorclose"))
+        rec.update(simulate_close_stop(z,entry_i,entry,support_stop,target,20,cost,"supportclose"))
+        rec.update(simulate_close_stop(z,entry_i,entry,support_stop,target,60,cost,"supportclose"))
     for h in (20,60):
         j=entry_i+h
         if j<len(z):
@@ -445,27 +496,28 @@ def summarize_trade_path(ev):
             if not isinstance(vals,tuple):vals=(vals,)
             base={"view":view}
             for k,v in zip(keys,vals):base[k]=v
-            for h in (20,60):
-                full=q[(q[f"path{h}_valid"]==True)&(q[f"path{h}_full_horizon"]==True)].copy()
-                rec=dict(base); rec["horizon"]=h; rec["n"]=len(full)
-                if len(full):
-                    outcome=full[f"path{h}_outcome"].astype(str)
-                    ret=full[f"path{h}_net_return"].astype(float)
-                    rm=full[f"path{h}_r_multiple"].astype(float)
-                    rec["target_rate"]=(outcome=="TARGET").mean()
-                    rec["stop_rate"]=outcome.isin(["STOP","STOP_SAME_DAY"]).mean()
-                    rec["timeout_rate"]=(outcome=="TIMEOUT").mean()
-                    rec["mean_return"]=ret.mean()
-                    rec["median_return"]=ret.median()
-                    rec["win_rate"]=(ret>0).mean()
-                    rec["mean_r"]=rm.mean()
-                    rec["median_r"]=rm.median()
-                    rec["mean_mfe"]=full[f"path{h}_mfe"].mean()
-                    rec["mean_mae"]=full[f"path{h}_mae"].mean()
-                else:
-                    for k in ["target_rate","stop_rate","timeout_rate","mean_return","median_return","win_rate","mean_r","median_r","mean_mfe","mean_mae"]:
-                        rec[k]=np.nan
-                out.append(rec)
+            for stop_mode,prefix in [("ANCHOR_LOW","path"),("ANCHOR_CLOSE","anchorclose"),("SUPPORT_CLOSE","supportclose")]:
+                for h in (20,60):
+                    full=q[(q[f"{prefix}{h}_valid"]==True)&(q[f"{prefix}{h}_full_horizon"]==True)].copy()
+                    rec=dict(base); rec["stop_mode"]=stop_mode; rec["horizon"]=h; rec["n"]=len(full)
+                    if len(full):
+                        outcome=full[f"{prefix}{h}_outcome"].astype(str)
+                        ret=full[f"{prefix}{h}_net_return"].astype(float)
+                        rm=full[f"{prefix}{h}_r_multiple"].astype(float)
+                        rec["target_rate"]=(outcome=="TARGET").mean()
+                        rec["stop_rate"]=outcome.str.startswith("STOP").mean()
+                        rec["timeout_rate"]=(outcome=="TIMEOUT").mean()
+                        rec["mean_return"]=ret.mean()
+                        rec["median_return"]=ret.median()
+                        rec["win_rate"]=(ret>0).mean()
+                        rec["mean_r"]=rm.mean()
+                        rec["median_r"]=rm.median()
+                        rec["mean_mfe"]=full[f"{prefix}{h}_mfe"].mean()
+                        rec["mean_mae"]=full[f"{prefix}{h}_mae"].mean()
+                    else:
+                        for k in ["target_rate","stop_rate","timeout_rate","mean_return","median_return","win_rate","mean_r","median_r","mean_mfe","mean_mae"]:
+                            rec[k]=np.nan
+                    out.append(rec)
     return pd.DataFrame(out)
 
 def main():
@@ -550,6 +602,6 @@ def main():
             if c in show:show[c]=(show[c]*100).round(2)
         for c in ["mean_r","median_r"]:
             if c in show:show[c]=show[c].round(2)
-        print("\n=== E3/E4 STRUCTURAL TRADE PATH: ANCHOR STOP VS EMA448 TARGET ===")
+        print("\n=== E3/E4 STRUCTURAL TRADE PATH: STOP MODEL COMPARISON VS EMA448 TARGET ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
