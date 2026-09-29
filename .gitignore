@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+krx_data/
+dante_results/
+*.parquet
+.DS_Store
