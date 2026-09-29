@@ -485,16 +485,30 @@ def main():
     if not out.empty:
         out=out.sort_values(["score","event_date"],ascending=[False,False]).reset_index(drop=True)
         out["rank"]=np.arange(1,len(out)+1)
+    # Keep the legacy all-research file for compatibility, but make the
+    # user-facing recommendation board explicit so RESEARCH_ONLY rows are not
+    # mistaken for actual Dante candidates.
     out.to_csv(a.out/"event_first_candidates.csv",index=False,encoding="utf-8-sig")
+    if not out.empty:
+        classic=out[out["classic_tier"].ne("")].copy()
+        research_only=out[out["classic_tier"].eq("")].copy()
+    else:
+        classic=out.copy()
+        research_only=out.copy()
+    classic.to_csv(a.out/"classic_dante_candidates.csv",index=False,encoding="utf-8-sig")
+    research_only.to_csv(a.out/"research_only_candidates.csv",index=False,encoding="utf-8-sig")
     charts_dir=a.out/"charts"
     for rec,z in chart_inputs:
         try:
             render_candidate_chart(z,rec,charts_dir)
         except Exception as exc:
             print(f'chart_failed code={rec.get("code")} error={exc!r}',flush=True)
-    print(f"event_first_candidates={len(out):,} charts={len(chart_inputs):,}",flush=True)
+    print(
+        f"event_first_candidates={len(out):,} classic_candidates={len(classic):,} "
+        f"research_only={len(research_only):,} charts={len(chart_inputs):,}",
+        flush=True,
+    )
     if not out.empty:
-        classic=out[out["classic_tier"].ne("")].copy()
         if not classic.empty:
             print("\n=== CLASSIC_DANTE_CANDIDATES ===")
             print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_window_days_left","reaccel_early","reaccel_confirmed","reaccel_strong","current_close","prior1_high","prior3_high","prior5_high","reaccel_trigger_1d","reaccel_trigger_3d","reaccel_trigger_5d","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","current_rr_to_448","reaccel3_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
