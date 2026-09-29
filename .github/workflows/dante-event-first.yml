@@ -7,6 +7,9 @@ on:
       - '.github/workflows/dante-event-first.yml'
       - 'research/dante/dante_event_first_scanner.py'
   workflow_dispatch:
+  schedule:
+    # 16:20 KST, Monday-Friday (GitHub cron is UTC)
+    - cron: '20 7 * * 1-5'
 
 jobs:
   scan:
