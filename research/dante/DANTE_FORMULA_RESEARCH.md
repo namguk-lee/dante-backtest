@@ -244,3 +244,49 @@ Then report:
    - long-base/volume-compression features around Rainbow labels
 4. Reject any proxy that only fits a few hand-picked examples.
 5. Only after repeated matching, add it as a clearly named **proxy**, never as the proprietary formula.
+
+## 15. Share / 지분 1:1 empirical narrowing — 2026-09-29
+
+Public wording and dated-case reconstruction now narrow the practical interpretation:
+
+- official/public descriptions repeatedly say an MA-relative **1:1 or more** position, not “exactly 1.00”
+- a public transcript describes the structure as recovering by roughly the amount previously fallen
+- the reference line can change (20 / 60 / 112 / 224 are all discussed publicly)
+- the reference MA is therefore part of the technique; the same stock can have a different target depending on the chosen MA
+
+Dated confirmed examples used:
+- Messe Esang: EMA224, 2025-06-17
+- CP System: EMA60, 2025-08-01
+- BCNC: EMA112, 2025-08-08
+- Saevitchem: EMA112, 2025-08-01
+- Parton: EMA112, 2025-11-17
+
+A research candidate that compares the current buy-side recovery above the selected MA against the preceding sell-side downside around the structural recovery cross produced:
+
+- Messe Esang: 2.53
+- CP System: 1.67
+- BCNC: 2.99
+- Saevitchem: 1.01
+- Parton: 1.64
+
+All 5 publicly labeled “1:1 or more” examples were >= 1.
+
+A public pre-confirmation control:
+- NanoEntek, EMA224, 2025-05-29: -0.60 (price had not established the required buy-side recovery)
+
+However, **this candidate has weak standalone selectivity**. Same-date full-market controls showed that among stocks already above the selected MA and with a computable recovery structure, the candidate was >=1 in roughly 60%–89% of the eligible universe depending on date/reference MA.
+
+Therefore:
+
+1. The amplitude interpretation is currently the strongest working approximation for the **meaning of 1:1**.
+2. It must **not** be used alone as a recommendation filter.
+3. It should be combined with the context repeatedly shown in official examples: reverse-array/turning structure, MA settlement, accumulation, concrete/support, and other confirmation signals.
+4. The exact proprietary/manual swing-selection rule remains unconfirmed; name the implementation `research_share_1to1_amplitude_proxy`, not “exact Dante formula”.
+
+Fixed-window candle-count 50:50 and simple fixed-window area ratios were not consistent enough across the five confirmed cases to treat as the formula.
+
+Research artifacts:
+- workflow Run #6: same-date full-market control
+- workflow Run #11: local-wave / structural geometry
+- `share_1to1_geometry_v3.csv`
+- `share_1to1_metric_summary_v3.csv`
