@@ -121,25 +121,36 @@ def scan_one(g,start,cost):
 
 def summarize(ev):
     out=[]
-    for (sp,k),q in ev.groupby(["split","kind"],dropna=False):
-        rec={"split":sp,"kind":k,"n":len(q)}
-        for h in (20,60):
-            s=q[f"ret{h}"].dropna()
-            rec[f"n{h}"]=len(s); rec[f"mean{h}"]=s.mean() if len(s) else np.nan
-            rec[f"median{h}"]=s.median() if len(s) else np.nan
-            rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
-        out.append(rec)
-    return pd.DataFrame(out).sort_values(["split","kind"])
+    regimes=[("ALL",ev),("BREADTH50",ev[ev.breadth20>=.50]),("BREADTH60",ev[ev.breadth20>=.60])]
+    for regime,base in regimes:
+        for (sp,k),q in base.groupby(["split","kind"],dropna=False):
+            rec={"regime":regime,"split":sp,"kind":k,"n":len(q)}
+            for h in (20,60):
+                s=q[f"ret{h}"].dropna()
+                rec[f"n{h}"]=len(s); rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+                rec[f"median{h}"]=s.median() if len(s) else np.nan
+                rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            out.append(rec)
+    return pd.DataFrame(out).sort_values(["regime","split","kind"])
 
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
+    panel=panel.sort_values(["series_id","date"]).reset_index(drop=True)
+    panel["mret20"]=panel.groupby("series_id",sort=False)["adjusted_close"].pct_change(20,fill_method=None)
+    b=panel.dropna(subset=["mret20"]).copy()
+    b["up20"]=(b["mret20"]>0).astype(float)
+    breadth=(b.groupby(["exchange","date"],as_index=False)["up20"].mean()
+               .rename(columns={"date":"signal_date","up20":"breadth20"}))
     start=pd.Timestamp(a.start); cost=a.cost_bps/10000.0
     rows=[]; total=panel.series_id.nunique()
     for n,(sid,g) in enumerate(panel.groupby("series_id",sort=False),1):
         if len(g)>=560:rows.extend(scan_one(g,start,cost))
         if n%250==0 or n==total:print(f"series {n}/{total} events={len(rows):,}",flush=True)
     ev=pd.DataFrame(rows)
+    if not ev.empty:
+        ev["signal_date"]=pd.to_datetime(ev["signal_date"],errors="coerce")
+        ev=ev.merge(breadth,on=["exchange","signal_date"],how="left")
     ev.to_csv(a.out/"event_first_historical_events.csv",index=False,encoding="utf-8-sig")
     sm=summarize(ev) if not ev.empty else pd.DataFrame()
     sm.to_csv(a.out/"event_first_summary.csv",index=False,encoding="utf-8-sig")
