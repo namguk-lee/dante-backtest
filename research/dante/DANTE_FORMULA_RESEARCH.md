@@ -205,7 +205,7 @@ Source:
 | Saevitchem | 2025-08-01 | 112 recovery / MA-hit | public MA structure; target 448 then prior resistance |
 | BCNC | 2025-08-08 | 112-based 1:1, reverse-MA, accumulation, concrete | Color-changing Blue-dot, Watermelon, green arrow |
 | DongA Eltek | 2025-08-25 | reverse-MA, 112 settlement, accumulation, concrete | Color-changing Blue-dot, Watermelon |
-| Ilyang? (official recap example) | 2025-era recap | reverse-MA, anchor, concrete, Young-cha | pink arrow, Watermelon, color-changing Blue-dot |
+| 이연제약 | 2025 recap | reverse-MA, anchor, concrete, 영차 | pink arrow, Watermelon, color-changing Blue-dot |
 | Zai S&D | 2025-12-02 | double-bottom, strong angle candle, sideways correction | Watermelon, Rainbow, color-changing Blue-dot |
 
 Note: expand this table before any proprietary-proxy implementation.
