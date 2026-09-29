@@ -133,6 +133,31 @@ def summarize(ev):
             out.append(rec)
     return pd.DataFrame(out).sort_values(["regime","split","kind"])
 
+def summarize_yearly(ev):
+    out=[]
+    if ev.empty:return pd.DataFrame()
+    x=ev.copy()
+    x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
+    groups=[
+        ("YEAR_ALL",["year","kind"]),
+        ("YEAR_EXCHANGE",["year","exchange","kind"]),
+        ("YEAR_QUALITY",["year","event_quality","kind"]),
+    ]
+    for view,keys in groups:
+        for vals,q in x.groupby(keys,dropna=False):
+            if not isinstance(vals,tuple):vals=(vals,)
+            rec={"view":view}
+            for k,v in zip(keys,vals):rec[k]=v
+            rec["n"]=len(q)
+            for h in (20,60):
+                s=q[f"ret{h}"].dropna()
+                rec[f"n{h}"]=len(s)
+                rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+                rec[f"median{h}"]=s.median() if len(s) else np.nan
+                rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -154,6 +179,8 @@ def main():
     ev.to_csv(a.out/"event_first_historical_events.csv",index=False,encoding="utf-8-sig")
     sm=summarize(ev) if not ev.empty else pd.DataFrame()
     sm.to_csv(a.out/"event_first_summary.csv",index=False,encoding="utf-8-sig")
+    yr=summarize_yearly(ev)
+    yr.to_csv(a.out/"event_first_yearly.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
