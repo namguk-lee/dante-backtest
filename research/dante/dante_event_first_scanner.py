@@ -68,9 +68,7 @@ def event_mask(z,a):
         (z.ret1>=a.min_event_return) &
         (z.body>=a.min_event_body) &
         (z.vr>=a.min_event_volume_ratio) &
-        (z.amount20>=a.min_turnover) &
-        (z.close_pos>=.65) &
-        (z.upper_wick<=.35)
+        (z.amount20>=a.min_turnover)
     )
 
 def find_stage1(panel,a):
@@ -84,11 +82,12 @@ def find_stage1(panel,a):
         if ev.empty:continue
         # Favor the most recent meaningful event. Keep strongest stats for diagnostics.
         e=ev.iloc[-1]; recent_high=float(z.loc[e.name:,"ah"].max()) if e.name in z.index else float(e.ah)
+        quality="CLEAN_BREAKOUT" if (e.close_pos>=.65 and e.upper_wick<=.35) else "WICK_ENERGY"
         rows.append({
             "series_id":sid,"code":str(e.code).zfill(6),"exchange":e.exchange,"name":e.get("name",""),
             "base_date":base_date,"event_date":e.date,"event_open":float(e.open),"event_close":float(e.close),
             "event_ret_pct":float(e.ret1*100),"event_body_pct":float(e.body*100),
-            "event_volume_ratio":float(e.vr),"event_close_pos":float(e.close_pos),
+            "event_volume_ratio":float(e.vr),"event_quality":quality,"event_close_pos":float(e.close_pos),
             "event_upper_wick":float(e.upper_wick),"event_amount20":float(e.amount20),
             "event_above_prior20_high":bool(e.ac>e.prior20_high if pd.notna(e.prior20_high) else False),
             "event_cross224":bool(e.cross224),"event_ema224":float(e.ema224) if pd.notna(e.ema224) else np.nan,
@@ -177,6 +176,7 @@ def classify(z,event_date):
     score+=8 if vol_cool else 0
     score+=8 if closes_below==0 else 3
     score+=6 if bool(e.ac>e.prior20_high) else 0
+    score+=4 if (e.close_pos>=.65 and e.upper_wick<=.35) else 0
     factor_cur=float(cur.ac/cur.close) if float(cur.close)>0 else 1.0
     ema224_raw=float(cur.ema224/factor_cur)
     ema448_raw=float(cur.ema448/factor_cur)
@@ -274,6 +274,7 @@ def main():
             watch.append({**rec,"reject_reason":"no_strong_event_after_naver_refresh","refresh_error":err})
             continue
         e=ev.iloc[-1]
+        quality="CLEAN_BREAKOUT" if (e.close_pos>=.65 and e.upper_wick<=.35) else "WICK_ENERGY"
         refreshed_rec={
             **rec,
             "event_date":e.date,
@@ -282,6 +283,7 @@ def main():
             "event_ret_pct":float(e.ret1*100),
             "event_body_pct":float(e.body*100),
             "event_volume_ratio":float(e.vr),
+            "event_quality":quality,
             "event_close_pos":float(e.close_pos),
             "event_upper_wick":float(e.upper_wick),
             "event_amount20":float(e.amount20),
