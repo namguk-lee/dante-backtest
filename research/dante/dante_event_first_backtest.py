@@ -45,13 +45,18 @@ def feat(g):
     g["upper_wick"]=(g.ah-np.maximum(g.ao,g.ac))/rng
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["below80"]=(g.ac<g.ema224).shift(1).rolling(80,min_periods=80).sum()
+    g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
+    g["event_breakout20"]=(g.ac>g.prior20_high)
+    g["event_breakout_strength"]=g.ac/g.prior20_high-1
+    g["ema112_slope20"]=g.ema112/g.ema112.shift(20)-1
+    g["ema224_slope20"]=g.ema224/g.ema224.shift(20)-1
     return g.reset_index(drop=True)
 
 def split(d):
     y=pd.Timestamp(d).year
     return "TRAIN" if y<=2021 else "VALID" if y<=2024 else "TEST"
 
-def add_event(rows,z,kind,signal_i,event_i,cost):
+def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
     entry_i=signal_i+1
     if entry_i>=len(z):return
     entry=float(z.at[entry_i,"ao"])
@@ -59,7 +64,17 @@ def add_event(rows,z,kind,signal_i,event_i,cost):
     rec={"series_id":z.at[signal_i,"series_id"],"exchange":z.at[signal_i,"exchange"],
          "kind":kind,"event_date":z.at[event_i,"date"],"signal_date":z.at[signal_i,"date"],
          "entry_date":z.at[entry_i,"date"],"entry":entry,"split":split(z.at[signal_i,"date"]),
-         "event_quality":"CLEAN_BREAKOUT" if (z.at[event_i,"close_pos"]>=.65 and z.at[event_i,"upper_wick"]<=.35) else "WICK_ENERGY"}
+         "event_quality":"CLEAN_BREAKOUT" if (z.at[event_i,"close_pos"]>=.65 and z.at[event_i,"upper_wick"]<=.35) else "WICK_ENERGY",
+         "event_breakout20":bool(z.at[event_i,"event_breakout20"]) if pd.notna(z.at[event_i,"event_breakout20"]) else False,
+         "event_breakout_strength":float(z.at[event_i,"event_breakout_strength"]) if pd.notna(z.at[event_i,"event_breakout_strength"]) else np.nan,
+         "event_volume_ratio":float(z.at[event_i,"vr"]) if pd.notna(z.at[event_i,"vr"]) else np.nan,
+         "event_return":float(z.at[event_i,"ret1"]) if pd.notna(z.at[event_i,"ret1"]) else np.nan,
+         "event_body":float(z.at[event_i,"body"]) if pd.notna(z.at[event_i,"body"]) else np.nan,
+         "signal_ema224_slope20":float(z.at[signal_i,"ema224_slope20"]) if pd.notna(z.at[signal_i,"ema224_slope20"]) else np.nan,
+         "signal_gap112_224":float(abs(z.at[signal_i,"ema224"]-z.at[signal_i,"ema112"])/z.at[signal_i,"ema224"]) if pd.notna(z.at[signal_i,"ema224"]) and z.at[signal_i,"ema224"]>0 and pd.notna(z.at[signal_i,"ema112"]) else np.nan,
+         "signal_headroom448":float(z.at[signal_i,"ema448"]/z.at[signal_i,"ac"]-1) if pd.notna(z.at[signal_i,"ema448"]) and z.at[signal_i,"ac"]>0 else np.nan}
+    if context:
+        rec.update(context)
     for h in (20,60):
         j=entry_i+h
         if j<len(z):
@@ -100,8 +115,16 @@ def scan_one(g,start,cost):
         headroom=float(z.at[cross_i,"ema448"]/z.at[cross_i,"ac"]-1) if z.at[cross_i,"ac"]>0 else np.nan
         gap=float(abs(z.at[cross_i,"ema224"]-z.at[cross_i,"ema112"])/z.at[cross_i,"ema224"])
         if not(0.05<=headroom<=0.35 and gap<=.08):continue
+        cross_ctx={
+            "event_to_cross_days":int(cross_i-i),
+            "cross_headroom448":headroom,
+            "cross_gap112_224":gap,
+            "cross_ema224_slope20":float(z.at[cross_i,"ema224_slope20"]) if pd.notna(z.at[cross_i,"ema224_slope20"]) else np.nan,
+            "cross_ema112_slope20":float(z.at[cross_i,"ema112_slope20"]) if pd.notna(z.at[cross_i,"ema112_slope20"]) else np.nan,
+            "cross_anchor_margin":float(z.at[cross_i,"ac"]/anchor-1) if anchor>0 else np.nan,
+        }
         if cross_i-cooldown["E2_224_RECOVERY"]>=40:
-            add_event(rows,z,"E2_224_RECOVERY",cross_i,i,cost); cooldown["E2_224_RECOVERY"]=cross_i
+            add_event(rows,z,"E2_224_RECOVERY",cross_i,i,cost,context=cross_ctx); cooldown["E2_224_RECOVERY"]=cross_i
 
         # Stage 3: lower-volume pullback that still holds EMA224 and anchor.
         pull_i=None
@@ -116,7 +139,21 @@ def scan_one(g,start,cost):
             if 0<=dist<=.08 and -.20<=dd<=-.03 and volcool:
                 pull_i=j;break
         if pull_i is not None and pull_i-cooldown["E3_CLASSIC_PULLBACK"]>=40:
-            add_event(rows,z,"E3_CLASSIC_PULLBACK",pull_i,i,cost); cooldown["E3_CLASSIC_PULLBACK"]=pull_i
+            pull_ctx=dict(cross_ctx)
+            pull_ctx.update({
+                "cross_to_pull_days":int(pull_i-cross_i),
+                "event_to_pull_days":int(pull_i-i),
+                "pull_dist224":float(z.at[pull_i,"ac"]/z.at[pull_i,"ema224"]-1) if z.at[pull_i,"ema224"]>0 else np.nan,
+                "pull_drawdown":float(z.at[pull_i,"ac"]/post_high-1) if post_high>0 else np.nan,
+                "pull_volume_event_ratio":float(z.at[pull_i,"volume"]/event_vol) if event_vol>0 else np.nan,
+                "pull_volume_v20_ratio":float(z.at[pull_i,"vr"]) if pd.notna(z.at[pull_i,"vr"]) else np.nan,
+                "pull_anchor_margin":float(z.at[pull_i,"ac"]/anchor-1) if anchor>0 else np.nan,
+                "pull_headroom448":float(z.at[pull_i,"ema448"]/z.at[pull_i,"ac"]-1) if z.at[pull_i,"ac"]>0 else np.nan,
+                "pull_gap112_224":float(abs(z.at[pull_i,"ema224"]-z.at[pull_i,"ema112"])/z.at[pull_i,"ema224"]) if z.at[pull_i,"ema224"]>0 else np.nan,
+                "pull_ema224_slope20":float(z.at[pull_i,"ema224_slope20"]) if pd.notna(z.at[pull_i,"ema224_slope20"]) else np.nan,
+                "pull_ema112_slope20":float(z.at[pull_i,"ema112_slope20"]) if pd.notna(z.at[pull_i,"ema112_slope20"]) else np.nan,
+            })
+            add_event(rows,z,"E3_CLASSIC_PULLBACK",pull_i,i,cost,context=pull_ctx); cooldown["E3_CLASSIC_PULLBACK"]=pull_i
     return rows
 
 def summarize(ev):
@@ -207,6 +244,58 @@ def summarize_robustness(ev):
             out.append(rec)
     return pd.DataFrame(out)
 
+
+def summarize_structure(ev):
+    """Describe E3 structure without choosing thresholds from future returns."""
+    if ev.empty:return pd.DataFrame()
+    x=ev[ev["kind"]=="E3_CLASSIC_PULLBACK"].copy()
+    if x.empty:return pd.DataFrame()
+    x["ema224_slope_bin"]=pd.cut(
+        x["pull_ema224_slope20"],[-np.inf,-.02,0,.02,np.inf],
+        labels=["LT_M2","M2_0","0_2","GE2"],right=False,
+    )
+    x["gap_bin"]=pd.cut(
+        x["pull_gap112_224"],[-np.inf,.03,.05,.08,np.inf],
+        labels=["LT3","3_5","5_8","GE8"],right=False,
+    )
+    x["headroom_bin"]=pd.cut(
+        x["pull_headroom448"],[-np.inf,.10,.20,.35,np.inf],
+        labels=["LT10","10_20","20_35","GE35"],right=False,
+    )
+    x["event_to_cross_bin"]=pd.cut(
+        x["event_to_cross_days"],[-np.inf,5,10,15,np.inf],
+        labels=["LE4","5_9","10_14","GE15"],right=False,
+    )
+    x["cross_to_pull_bin"]=pd.cut(
+        x["cross_to_pull_days"],[-np.inf,4,8,12,np.inf],
+        labels=["LE3","4_7","8_11","GE12"],right=False,
+    )
+    x["pullback_bin"]=pd.cut(
+        x["pull_drawdown"],[-np.inf,-.12,-.07,-.03,np.inf],
+        labels=["LE_M12","M12_M7","M7_M3","GT_M3"],right=False,
+    )
+    dimensions=[
+        ("EVENT_BREAKOUT20","event_breakout20"),
+        ("EMA224_SLOPE20","ema224_slope_bin"),
+        ("GAP112_224","gap_bin"),
+        ("HEADROOM448","headroom_bin"),
+        ("EVENT_TO_CROSS","event_to_cross_bin"),
+        ("CROSS_TO_PULL","cross_to_pull_bin"),
+        ("PULLBACK_DEPTH","pullback_bin"),
+    ]
+    out=[]
+    for view,col in dimensions:
+        for (sp,bucket),q in x.groupby(["split",col],dropna=False,observed=True):
+            rec={"view":view,"bucket":bucket,"split":sp,"n":len(q)}
+            for h in (20,60):
+                s=q[f"ret{h}"].dropna()
+                rec[f"n{h}"]=len(s)
+                rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+                rec[f"median{h}"]=s.median() if len(s) else np.nan
+                rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -235,6 +324,8 @@ def main():
     yr.to_csv(a.out/"event_first_yearly.csv",index=False,encoding="utf-8-sig")
     rb=summarize_robustness(ev)
     rb.to_csv(a.out/"event_first_robustness.csv",index=False,encoding="utf-8-sig")
+    st=summarize_structure(ev)
+    st.to_csv(a.out/"event_first_structure.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -254,4 +345,10 @@ def main():
             if c in focus:focus[c]=(focus[c]*100).round(2)
         print("\n=== E3 ROBUSTNESS / WINNER CONCENTRATION (%) ===")
         print(focus.to_string(index=False))
+    if not st.empty:
+        show=st.copy()
+        for c in ["mean20","median20","win20","mean60","median60","win60"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        print("\n=== E3 STRUCTURE DIAGNOSTIC BY SPLIT (%) ===")
+        print(show.to_string(index=False))
 if __name__=="__main__":main()
