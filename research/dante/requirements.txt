@@ -3,3 +3,4 @@ numpy>=2.0,<3
 pandas>=2.2,<3
 pyarrow>=17,<24
 matplotlib>=3.9,<4
+pykrx>=1.2.9,<2
