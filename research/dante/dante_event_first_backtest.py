@@ -251,6 +251,16 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
         support_stop=max(stop,ema112_signal*.98) if math.isfinite(ema112_signal) else stop
         rec["anchor_stop_adj"]=stop
         rec["support112_stop_adj"]=support_stop
+        rec["anchor112_structural_rr"]=(
+            (target-entry)/(entry-stop)
+            if all(math.isfinite(v) for v in [target,entry,stop]) and stop<entry<target
+            else np.nan
+        )
+        rec["support112_structural_rr"]=(
+            (target-entry)/(entry-support_stop)
+            if all(math.isfinite(v) for v in [target,entry,support_stop]) and support_stop<entry<target
+            else np.nan
+        )
         for h in (20,60):
             rec.update(simulate_path(z,entry_i,entry,stop,target,h,cost))
             rec.update(simulate_close_stop(z,entry_i,entry,support_stop,target,h,cost,"support112"))
@@ -895,6 +905,47 @@ def summarize_public_112_entry_path(ev):
         out.append(rec)
     return pd.DataFrame(out)
 
+def summarize_public_112_rr(ev):
+    """Plan-level R:R diagnostic for the E112 branch.
+
+    This does NOT claim to reproduce Dante's proprietary 'share 1:1' formula.
+    It tests only a transparent trade-plan condition seen in public examples:
+    actual next-open entry, EMA112/anchor support stop, and EMA224 target have
+    at least 1:1 structural reward/risk.
+    """
+    if ev.empty:return pd.DataFrame()
+    x=ev[ev["kind"].isin(["E112_RECOVERY","E112_SETTLED2","E112_PULLBACK"])].copy()
+    if x.empty:return pd.DataFrame()
+    rr=pd.to_numeric(x["support112_structural_rr"],errors="coerce")
+    x["support112_rr_state"]=np.where(rr>=1.0,"RR_GE1","RR_LT1_OR_INVALID")
+    out=[]
+    for (sp,kind,state),q in x.groupby(
+        ["split","kind","support112_rr_state"],dropna=False,observed=True
+    ):
+        rec={
+            "split":sp,"kind":kind,"state":state,"n":len(q),
+            "median_support112_rr":pd.to_numeric(q["support112_structural_rr"],errors="coerce").median(),
+            "median_headroom224":pd.to_numeric(q["headroom224_signal"],errors="coerce").median(),
+        }
+        for h in (20,60):
+            s=pd.to_numeric(q[f"ret{h}"],errors="coerce").dropna()
+            rec[f"n{h}"]=len(s)
+            rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+            rec[f"median{h}"]=s.median() if len(s) else np.nan
+            rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            full=q[(q[f"support112{h}_valid"]==True)&(q[f"support112{h}_full_horizon"]==True)].copy()
+            if len(full):
+                outcome=full[f"support112{h}_outcome"].astype(str)
+                rec[f"target{h}"]=(outcome=="TARGET").mean()
+                rec[f"stop{h}"]=outcome.str.startswith("STOP").mean()
+                rec[f"pathmean{h}"]=full[f"support112{h}_net_return"].mean()
+                rec[f"pathmedian{h}"]=full[f"support112{h}_net_return"].median()
+            else:
+                rec[f"target{h}"]=np.nan; rec[f"stop{h}"]=np.nan
+                rec[f"pathmean{h}"]=np.nan; rec[f"pathmedian{h}"]=np.nan
+        out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -948,6 +999,8 @@ def main():
     turn112224.to_csv(a.out/"event_first_public_112_224_turn.csv",index=False,encoding="utf-8-sig")
     entry112=summarize_public_112_entry_path(ev)
     entry112.to_csv(a.out/"event_first_public_112_entry_path.csv",index=False,encoding="utf-8-sig")
+    rr112=summarize_public_112_rr(ev)
+    rr112.to_csv(a.out/"event_first_public_112_rr.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -1022,5 +1075,15 @@ def main():
         for c in pctcols:
             if c in show:show[c]=(show[c]*100).round(2)
         print("\n=== PUBLIC 112 SETTLEMENT / PULLBACK PATH TO EMA224 (%) ===")
+        print(show.to_string(index=False))
+    if not rr112.empty:
+        show=rr112.copy()
+        for c in ["median_headroom224","mean20","median20","win20","target20","stop20",
+                  "pathmean20","pathmedian20","mean60","median60","win60","target60",
+                  "stop60","pathmean60","pathmedian60"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        if "median_support112_rr" in show:
+            show["median_support112_rr"]=show["median_support112_rr"].round(2)
+        print("\n=== E112 TRANSPARENT STRUCTURAL R:R >= 1 DIAGNOSTIC (%) ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
