@@ -147,7 +147,10 @@ def bowl3_structure_proxy(z):
     decline_pct=(trough/peak-1)*100 if peak>0 else np.nan
     if pd.isna(cur.ema224):return {"match":False,"stage":"","decline_days":decline_days,"base_days":base_days,"decline_pct":decline_pct,"trough_date":z.at[trough_i,"date"],"peak_date":z.at[peak_i,"date"]}
     dist224=(float(cur.ac)/float(cur.ema224)-1)*100
-    stage="RECOVERED_224" if dist224>=0 else ("APPROACH_224" if dist224>=-8 else "")
+    # Bowl-3 is the 224 approach / *early* recovery zone, not a mature
+    # stage-4 expansion far above the long MA.
+    stage=("RECOVERED_224" if 0<=dist224<=15 else
+           ("APPROACH_224" if -8<=dist224<0 else ""))
     match=bool(
         decline_days>=10 and pd.notna(decline_pct) and decline_pct<=-20 and
         base_days>=40 and base_days>=decline_days and
