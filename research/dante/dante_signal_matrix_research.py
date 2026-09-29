@@ -244,7 +244,8 @@ def scan(z,min_turnover):
     below224_run=below224_run_before_recovery(z)
     bowl_near224_10=bool(pd.notna(cur.ema224) and abs((cur.ac/cur.ema224-1)*100)<=10)
     bowl_below224_80=bool(pd.notna(below224_run) and below224_run>=80)
-    bowl_public_conditions=bool(sig_bowl3 and bowl_near224_10 and bowl_below224_80)
+    public_224_4month_near10=bool(bowl_near224_10 and bowl_below224_80)
+    bowl_public_conditions=bool(sig_bowl3 and public_224_4month_near10)
 
     # ---------- Research proxies ----------
     share=[]
@@ -342,6 +343,7 @@ def scan(z,min_turnover):
         "below224_run_before_recovery":below224_run,
         "bowl_near224_10":bowl_near224_10,
         "bowl_below224_80":bowl_below224_80,
+        "public_224_4month_near10":public_224_4month_near10,
         "bowl_public_conditions":bowl_public_conditions,
         "ema5":float(cur.ema5/factor),"ema112":float(cur.ema112/factor),"ema224":float(cur.ema224/factor),"ema448":float(cur.ema448/factor),
         "dist112_pct":float((cur.ac/cur.ema112-1)*100),"dist224_pct":float((cur.ac/cur.ema224-1)*100),"dist448_pct":float((cur.ac/cur.ema448-1)*100),
@@ -428,6 +430,7 @@ def main():
             "ma_hit_224_448":out[out.public_ma_hit_224_448].copy(),
             "bowl3":out[out.public_bowl3_structure_proxy].copy(),
             "bowl3_public_conditions":out[out.bowl_public_conditions].copy(),
+            "public_224_4month_near10":out[out.public_224_4month_near10].copy(),
         }
         for board_name,board in technique_boards.items():
             board.to_csv(a.out/f"board_{board_name}.csv",index=False,encoding="utf-8-sig")
@@ -450,7 +453,7 @@ def main():
         cols=["rank","rank_group","code","name","exchange","current_close","public_technique_count","public_context_count","research_proxy_count","support_context_count","broad_context_count","confluence_count","ma_turn_quality","signals",
               "share_ma","share_recovery_ratio","share_cycle_mean_ratio","blue_dot_bb35_dist_pct",
               "max_volume_ratio20_last20","current_volume_ratio20","dist112_pct","dist224_pct","dist448_pct",
-              "below224_run_before_recovery","bowl_public_conditions","long_ma_state","entry_validation"]
+              "below224_run_before_recovery","public_224_4month_near10","bowl_public_conditions","long_ma_state","entry_validation"]
         print(out[cols].head(40).to_string(index=False))
 
 if __name__=="__main__":
