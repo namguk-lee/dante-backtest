@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/dante-recommend.yml'
+      - 'research/dante/dante_recommendation_scanner.py'
+      - 'research/dante/refresh_recent_candidates_fdr.py'
+      - 'research/dante/collect_marcap_full_market.py'
+      - 'research/dante/requirements.txt'
   workflow_dispatch:
 
 jobs:
