@@ -1,0 +1,56 @@
+name: Dante classic scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dante-classic.yml'
+      - 'research/dante/dante_classic_scanner.py'
+  workflow_dispatch:
+  schedule:
+    # 16:35 KST, Monday-Friday (GitHub cron is UTC)
+    - cron: '35 7 * * 1-5'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - name: Restore classic marcap cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_classic_cache
+          key: marcap-classic-2023-2026-v1
+          restore-keys: |
+            marcap-classic-
+      - name: Build classic full-market panel
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2023-01-01"
+          --out krx_classic
+          --cache marcap_classic_cache
+          --refresh-end-year
+      - name: Run Dante classic scan
+        run: >-
+          python research/dante/dante_classic_scanner.py
+          --ko krx_classic/ko_eod.parquet
+          --kq krx_classic/kq_eod.parquet
+          --out dante_classic_results
+          --max-charts 8
+          --min-turnover 5000000000
+      - name: Upload classic results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-classic-${{ github.run_number }}
+          retention-days: 30
+          path: dante_classic_results/
