@@ -7,6 +7,7 @@ on:
       - '.github/workflows/dante-share-study.yml'
       - 'research/dante/dante_share_1to1_cases.csv'
       - 'research/dante/dante_share_1to1_study.py'
+      - 'research/dante/dante_share_proxy_control_study.py'
   workflow_dispatch:
 
 jobs:
@@ -40,6 +41,13 @@ jobs:
       - name: Run share 1to1 geometry study
         run: >-
           python research/dante/dante_share_1to1_study.py
+          --ko krx_share/ko_eod.parquet
+          --kq krx_share/kq_eod.parquet
+          --cases research/dante/dante_share_1to1_cases.csv
+          --out dante_share_study
+      - name: Run matched-market proxy control study
+        run: >-
+          python research/dante/dante_share_proxy_control_study.py
           --ko krx_share/ko_eod.parquet
           --kq krx_share/kq_eod.parquet
           --cases research/dante/dante_share_1to1_cases.csv
