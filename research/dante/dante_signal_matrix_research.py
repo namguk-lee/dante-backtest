@@ -116,6 +116,27 @@ def share_proxy_for_ma(z,ma_n):
     else:c["balance_error"]=np.nan
     return c
 
+def below224_run_before_recovery(z):
+    """Consecutive sessions below EMA224 before the latest current recovery.
+
+    Public Bowl-3 search material commonly refers to a long stay below EMA224.
+    This is exposed as evidence/context only; it is not a universal entry rule.
+    """
+    if z.empty or pd.isna(z.iloc[-1].ema224):return np.nan
+    i=len(z)-1
+    if z.at[i,"ac"]<z.at[i,"ema224"]:
+        j=i; n=0
+        while j>=0 and pd.notna(z.at[j,"ema224"]) and z.at[j,"ac"]<z.at[j,"ema224"]:
+            n+=1; j-=1
+        return n
+    cross=(z.ac>=z.ema224)&(z.ac.shift(1)<z.ema224.shift(1))
+    ids=np.flatnonzero(cross.fillna(False).to_numpy())
+    if not len(ids):return np.nan
+    ci=int(ids[-1]); j=ci-1; n=0
+    while j>=0 and pd.notna(z.at[j,"ema224"]) and z.at[j,"ac"]<z.at[j,"ema224"]:
+        n+=1; j-=1
+    return n
+
 def bowl3_structure_proxy(z):
     """Transparent approximation of the publicly described Bowl 1->2->3 structure.
 
@@ -220,6 +241,10 @@ def scan(z,min_turnover):
     sig_reverse112=bool(reverse_long and cur.ac>=cur.ema112 and cur.ac<cur.ema224)
     bowl=bowl3_structure_proxy(z)
     sig_bowl3=bool(bowl.get("match"))
+    below224_run=below224_run_before_recovery(z)
+    bowl_near224_10=bool(pd.notna(cur.ema224) and abs((cur.ac/cur.ema224-1)*100)<=10)
+    bowl_below224_80=bool(pd.notna(below224_run) and below224_run>=80)
+    bowl_public_conditions=bool(sig_bowl3 and bowl_near224_10 and bowl_below224_80)
 
     # ---------- Research proxies ----------
     share=[]
@@ -290,7 +315,9 @@ def scan(z,min_turnover):
         "support_context_count":support_count,
         "broad_context_count":broad_context_count,
         "confluence_count":total,
-        "signals":";".join(labels),"action_status":"RESEARCH_ONLY",
+        "signals":";".join(labels),
+        "action_status":"WATCHLIST_RESEARCH_ONLY",
+        "entry_validation":"NOT_VALIDATED",
         "reverse_112_224_448":reverse_long,
         "ema112_slope20_pct":float(cur.ema112_slope20) if pd.notna(cur.ema112_slope20) else np.nan,
         "ema224_slope20_pct":float(cur.ema224_slope20) if pd.notna(cur.ema224_slope20) else np.nan,
@@ -312,6 +339,10 @@ def scan(z,min_turnover):
         "bowl3_stage":bowl.get("stage",""),"bowl1_decline_days":bowl.get("decline_days",np.nan),
         "bowl2_base_days":bowl.get("base_days",np.nan),"bowl1_decline_pct":bowl.get("decline_pct",np.nan),
         "bowl_peak_date":bowl.get("peak_date",pd.NaT),"bowl_trough_date":bowl.get("trough_date",pd.NaT),
+        "below224_run_before_recovery":below224_run,
+        "bowl_near224_10":bowl_near224_10,
+        "bowl_below224_80":bowl_below224_80,
+        "bowl_public_conditions":bowl_public_conditions,
         "ema5":float(cur.ema5/factor),"ema112":float(cur.ema112/factor),"ema224":float(cur.ema224/factor),"ema448":float(cur.ema448/factor),
         "dist112_pct":float((cur.ac/cur.ema112-1)*100),"dist224_pct":float((cur.ac/cur.ema224-1)*100),"dist448_pct":float((cur.ac/cur.ema448-1)*100),
         "current_volume_ratio20":float(cur.vr20) if pd.notna(cur.vr20) else np.nan,
@@ -391,6 +422,16 @@ def main():
     proxy_only=out[out.public_technique_count.eq(0)].copy() if not out.empty else out.copy()
     proxy_only.to_csv(a.out/"signal_matrix_proxy_only.csv",index=False,encoding="utf-8-sig")
     if not out.empty:
+        technique_boards={
+            "256_long":out[out.public_256_long].copy(),
+            "ma_hit_112_224":out[out.public_ma_hit_112_224].copy(),
+            "ma_hit_224_448":out[out.public_ma_hit_224_448].copy(),
+            "bowl3":out[out.public_bowl3_structure_proxy].copy(),
+            "bowl3_public_conditions":out[out.bowl_public_conditions].copy(),
+        }
+        for board_name,board in technique_boards.items():
+            board.to_csv(a.out/f"board_{board_name}.csv",index=False,encoding="utf-8-sig")
+    if not out.empty:
         summary=[]
         signal_cols=[
             "public_256_long","public_ma_hit_112_224","public_ma_hit_224_448","public_bowl3_structure_proxy","public_reverse112_context",
@@ -408,7 +449,8 @@ def main():
     if not out.empty:
         cols=["rank","rank_group","code","name","exchange","current_close","public_technique_count","public_context_count","research_proxy_count","support_context_count","broad_context_count","confluence_count","ma_turn_quality","signals",
               "share_ma","share_recovery_ratio","share_cycle_mean_ratio","blue_dot_bb35_dist_pct",
-              "max_volume_ratio20_last20","current_volume_ratio20","dist112_pct","dist224_pct","dist448_pct"]
+              "max_volume_ratio20_last20","current_volume_ratio20","dist112_pct","dist224_pct","dist448_pct",
+              "below224_run_before_recovery","bowl_public_conditions","long_ma_state","entry_validation"]
         print(out[cols].head(40).to_string(index=False))
 
 if __name__=="__main__":
