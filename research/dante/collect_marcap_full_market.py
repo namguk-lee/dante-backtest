@@ -24,6 +24,10 @@ def parse_args():
     p.add_argument("--out",type=Path,default=Path("krx_data"))
     p.add_argument("--cache",type=Path,default=Path("marcap_cache"))
     p.add_argument("--refresh-end-year",action="store_true")
+    p.add_argument("--freshen-with-pykrx",action="store_true",
+                   help="Append missing recent KOSPI/KOSDAQ daily bars from pykrx after marcap's latest date.")
+    p.add_argument("--max-stale-calendar-days",type=int,default=None,
+                   help="Fail when the final panel is older than END by more than this many calendar days.")
     p.add_argument("--episode-gap-days",type=int,default=365)
     p.add_argument("--name-change-gap-days",type=int,default=30)
     p.add_argument("--corp-action-diff",type=float,default=0.03)
@@ -70,6 +74,107 @@ def load_year(path,start,end):
     else: x["reported_change_pct"]=np.nan
     return x
 
+def _pick_column(df,names):
+    for name in names:
+        if name in df.columns:
+            return name
+    return None
+
+def append_recent_pykrx(x,end):
+    """Append only dates newer than marcap's last row using pykrx bulk daily OHLCV.
+
+    Historical rows continue to come from marcap. This overlay is intentionally
+    narrow so a stale upstream annual parquet cannot silently make a "today"
+    scan several sessions old.
+    """
+    if x.empty:
+        return x
+    latest=pd.to_datetime(x["Date"],errors="coerce").max()
+    if pd.isna(latest) or latest>=end:
+        print(f"pykrx freshener: no overlay needed (marcap latest={latest})",flush=True)
+        return x
+    try:
+        from pykrx import stock
+    except Exception as exc:
+        print(f"pykrx freshener unavailable: {exc}",flush=True)
+        return x
+
+    meta=(x.sort_values("Date")
+            .drop_duplicates("Code",keep="last")
+            .assign(Code=lambda q:q["Code"].astype(str).str.replace(r"\\.0$","",regex=True).str.zfill(6))
+            .set_index("Code")[["Name","Market"]])
+    frames=[]
+    first=(latest+pd.Timedelta(days=1)).normalize()
+    for dt in pd.date_range(first,end.normalize(),freq="D"):
+        ds=dt.strftime("%Y%m%d")
+        day_n=0
+        for market in ("KOSPI","KOSDAQ"):
+            try:
+                q=stock.get_market_ohlcv_by_ticker(ds,market=market,alternative=False)
+            except Exception as exc:
+                print(f"pykrx {ds} {market} failed: {type(exc).__name__}: {exc}",flush=True)
+                continue
+            if q is None or q.empty:
+                continue
+            q=q.copy()
+            q.index=q.index.astype(str).str.replace(r"\\.0$","",regex=True).str.zfill(6)
+            cols={
+                "Open":_pick_column(q,["시가","Open"]),
+                "High":_pick_column(q,["고가","High"]),
+                "Low":_pick_column(q,["저가","Low"]),
+                "Close":_pick_column(q,["종가","Close"]),
+                "Volume":_pick_column(q,["거래량","Volume"]),
+                "Amount":_pick_column(q,["거래대금","Amount","Value"]),
+                "reported_change_pct":_pick_column(q,["등락률","Change","ChangeRate"]),
+            }
+            required=("Open","High","Low","Close","Volume")
+            if any(cols[k] is None for k in required):
+                print(f"pykrx {ds} {market}: unexpected columns={list(q.columns)}",flush=True)
+                continue
+            r=pd.DataFrame(index=q.index)
+            r["Date"]=dt
+            r["Code"]=r.index
+            r["Name"]=r.index.map(meta["Name"]) if len(meta) else r.index
+            r["Name"]=r["Name"].fillna(r["Code"])
+            for out_col in required:
+                r[out_col]=pd.to_numeric(q[cols[out_col]],errors="coerce")
+            if cols["Amount"] is not None:
+                r["Amount"]=pd.to_numeric(q[cols["Amount"]],errors="coerce")
+            else:
+                r["Amount"]=r["Close"]*r["Volume"]
+            if cols["reported_change_pct"] is not None:
+                r["reported_change_pct"]=pd.to_numeric(q[cols["reported_change_pct"]],errors="coerce")
+            else:
+                r["reported_change_pct"]=np.nan
+            r["Market"]=market
+            r=r.reset_index(drop=True)
+            r=r.dropna(subset=["Open","High","Low","Close","Volume"])
+            r=r[(r["Open"]>0)&(r["High"]>0)&(r["Low"]>0)&(r["Close"]>0)]
+            if not r.empty:
+                frames.append(r)
+                day_n+=len(r)
+        if day_n:
+            print(f"pykrx overlay {dt.date()}: {day_n:,} KOSPI/KOSDAQ rows",flush=True)
+    if not frames:
+        print(f"pykrx freshener: no rows appended after marcap latest={latest.date()}",flush=True)
+        return x
+    recent=pd.concat(frames,ignore_index=True)
+    # Make schemas compatible even when the annual parquet has extra columns.
+    for col in x.columns:
+        if col not in recent.columns:
+            recent[col]=np.nan
+    for col in recent.columns:
+        if col not in x.columns:
+            x[col]=np.nan
+    out=pd.concat([x,recent[x.columns]],ignore_index=True)
+    out=out.sort_values(["Code","Date"]).drop_duplicates(["Code","Date"],keep="last")
+    print(
+        f"pykrx freshener: appended {len(recent):,} rows; "
+        f"latest {latest.date()} -> {pd.to_datetime(out['Date']).max().date()}",
+        flush=True
+    )
+    return out
+
 def add_episode_ids(x,episode_gap_days,name_change_gap_days):
     x=x.sort_values(["Code","Date"]).copy()
     x["Code"]=x["Code"].astype(str).str.replace(r"\.0$","",regex=True).str.zfill(6)
@@ -102,12 +207,14 @@ def add_research_adjusted_close(x,diff_threshold):
     x["adjustment_bridge"]=mismatch
     return x
 
-def build_panel(paths,start,end,episode_gap_days,name_change_gap_days,diff_threshold):
+def build_panel(paths,start,end,episode_gap_days,name_change_gap_days,diff_threshold,freshen_with_pykrx=False):
     frames=[]
     for i,path in enumerate(paths,1):
         q=load_year(path,start,end); frames.append(q)
         print(f"read {path.name}: {len(q):,} rows ({i}/{len(paths)})",flush=True)
     x=pd.concat(frames,ignore_index=True)
+    if freshen_with_pykrx:
+        x=append_recent_pykrx(x,end)
     x=x.dropna(subset=["Date","Code","Open","High","Low","Close","Volume"])
     x=x[(x["Open"]>0)&(x["High"]>0)&(x["Low"]>0)&(x["Close"]>0)]
     x=x.sort_values(["Code","Date"]).drop_duplicates(["Code","Date"],keep="last")
@@ -125,7 +232,20 @@ def main():
     a.out.mkdir(parents=True,exist_ok=True)
     years=list(range(start.year,end.year+1))
     paths=[download_year(y,a.cache,refresh=(a.refresh_end_year and y==end.year)) for y in years]
-    panel=build_panel(paths,start,end,a.episode_gap_days,a.name_change_gap_days,a.corp_action_diff)
+    panel=build_panel(
+        paths,start,end,a.episode_gap_days,a.name_change_gap_days,a.corp_action_diff,
+        freshen_with_pykrx=a.freshen_with_pykrx
+    )
+    latest=panel["date"].max() if not panel.empty else pd.NaT
+    print(f"final panel latest={latest.date() if pd.notna(latest) else 'NaT'} requested_end={end.date()}",flush=True)
+    if a.max_stale_calendar_days is not None:
+        stale_days=(end.normalize()-pd.Timestamp(latest).normalize()).days if pd.notna(latest) else 999999
+        if stale_days>a.max_stale_calendar_days:
+            raise RuntimeError(
+                f"stale market panel: latest={latest.date() if pd.notna(latest) else None}, "
+                f"end={end.date()}, stale_calendar_days={stale_days}, "
+                f"allowed={a.max_stale_calendar_days}"
+            )
     ko=panel[panel["exchange"].eq("KO")].copy()
     kq=panel[panel["exchange"].eq("KQ")].copy()
     ko.to_parquet(a.out/"ko_eod.parquet",index=False)
