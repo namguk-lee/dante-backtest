@@ -140,7 +140,7 @@ def main():
     wanted={(35,2.0,0):"internet_bb35x2",(20,2.0,26):"internet_bb20x2_shift26"}
     refs=[]
     for key,name in wanted.items():
-        q=agg[(agg.period==key[0])&(agg.mult==key[1])&(agg.shift==key[2])].copy()
+        q=agg[(agg["period"]==key[0])&(np.isclose(agg["mult"],key[1]))&(agg["shift"]==key[2])].copy()
         if not q.empty:
             r=q.iloc[0].to_dict(); r["hypothesis"]=name; refs.append(r)
     pd.DataFrame(refs).to_csv(a.out/"blue_dot_internet_hypotheses.csv",index=False,encoding="utf-8-sig")
