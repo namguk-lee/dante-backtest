@@ -172,12 +172,23 @@ def classify(z,event_date):
     score+=8 if vol_cool else 0
     score+=8 if closes_below==0 else 3
     score+=6 if bool(e.ac>e.prior20_high) else 0
+    factor_cur=float(cur.ac/cur.close) if float(cur.close)>0 else 1.0
+    long_below=bool(e.below80>=60) if pd.notna(e.below80) else False
+    classic_tier=""
+    if anchor_alive and long_below and age>=1:
+        if category=="DANTE_PULLBACK" and 3<=headroom*100<=30 and gap112224<=.08:
+            classic_tier="A"
+        elif category=="224_HOLD" and 5<=headroom*100<=30 and gap112224<=.08:
+            classic_tier="B"
+        elif category=="PRE224_ENERGY" and 5<=headroom*100<=35 and gap112224<=.08:
+            classic_tier="B"
     return {
-        "category":category,"score":score,"age":age,"anchor_alive":anchor_alive,"closes_below_anchor":closes_below,
+        "category":category,"classic_tier":classic_tier,"score":score,"age":age,"anchor_alive":anchor_alive,"closes_below_anchor":closes_below,
         "had_224_cross":had_224_cross,"current_above224":currently_above224,"dist224_pct":dist224*100,
         "gap112224_pct":gap112224*100,"headroom448_pct":headroom*100,"drawdown_from_post_high_pct":drawdown*100,
-        "volume_cooled":vol_cool,"current_close":float(cur.close),"ema112":float(cur.ema112),"ema224":float(cur.ema224),
-        "ema448":float(cur.ema448),"current_volume_ratio":float(cur.vr) if pd.notna(cur.vr) else np.nan,
+        "volume_cooled":vol_cool,"current_close":float(cur.close),
+        "ema112":float(cur.ema112/factor_cur),"ema224":float(cur.ema224/factor_cur),
+        "ema448":float(cur.ema448/factor_cur),"current_volume_ratio":float(cur.vr) if pd.notna(cur.vr) else np.nan,
         "current_turnover20":float(cur.amount20) if pd.notna(cur.amount20) else np.nan
     }
 
@@ -215,7 +226,11 @@ def main():
     out.to_csv(a.out/"event_first_candidates.csv",index=False,encoding="utf-8-sig")
     print(f"event_first_candidates={len(out):,}",flush=True)
     if not out.empty:
-        cols=["rank","code","name","exchange","category","score","event_date","event_ret_pct","event_volume_ratio",
+        classic=out[out["classic_tier"].ne("")].copy()
+        if not classic.empty:
+            print("\n=== CLASSIC_DANTE_CANDIDATES ===")
+            print(classic[["rank","code","name","exchange","classic_tier","category","score","event_date","event_ret_pct","event_volume_ratio","current_close","ema112","ema224","ema448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
+        cols=["rank","code","name","exchange","classic_tier","category","score","event_date","event_ret_pct","event_volume_ratio",
               "current_close","ema112","ema224","ema448","dist224_pct","gap112224_pct","headroom448_pct",
               "drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]
         print(out[cols].head(30).to_string(index=False))
