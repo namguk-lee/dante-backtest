@@ -85,6 +85,15 @@ jobs:
           --signals dante_results/signals.csv
           --out dante_results
 
+      - name: Build recommendation candidates
+        run: >-
+          python research/dante/dante_recommendation_scanner.py
+          --ko krx_data/ko_eod.parquet
+          --kq krx_data/kq_eod.parquet
+          --out dante_results
+          --top 30
+          --min-turnover 5000000000
+
       - name: Print validation summaries
         if: success()
         run: |
