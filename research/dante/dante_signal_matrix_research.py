@@ -266,8 +266,11 @@ def scan(z,min_turnover):
     technique_count=sum(technique_flags.values())
     context_count=sum(context_flags.values())
     proxy_count=int(sig_share)+int(sig_blue)
-    support_count=int(sig_accum_cool)+int(conc)
-    total=technique_count+context_count+proxy_count+support_count
+    # Concrete proxy is currently very broad; keep it visible but do not let it
+    # inflate ranking/confluence until its selectivity is improved.
+    support_count=int(sig_accum_cool)
+    broad_context_count=int(conc)
+    total=technique_count+proxy_count+support_count
     if total<1:return None
 
     all_flags={**technique_flags,**context_flags,**proxy_flags,**support_flags}
@@ -283,6 +286,7 @@ def scan(z,min_turnover):
         "public_signal_count":technique_count,
         "research_proxy_count":proxy_count,
         "support_context_count":support_count,
+        "broad_context_count":broad_context_count,
         "confluence_count":total,
         "signals":";".join(labels),"action_status":"RESEARCH_ONLY",
         "reverse_112_224_448":reverse_long,
@@ -293,6 +297,14 @@ def scan(z,min_turnover):
             ("112UP" if pd.notna(cur.ema112_slope20) and cur.ema112_slope20>0 else "112DOWN")+";"+
             ("224UP" if pd.notna(cur.ema224_slope20) and cur.ema224_slope20>0 else "224DOWN")+";"+
             ("448UP" if pd.notna(cur.ema448_slope20) and cur.ema448_slope20>0 else "448DOWN")
+        ),
+        "ma_turn_quality":(
+            "TURNED_UP" if pd.notna(cur.ema112_slope20) and cur.ema112_slope20>0 else
+            ("FLAT_TO_DOWN" if pd.notna(cur.ema112_slope20) and cur.ema112_slope20>-1 else "FALLING")
+        ),
+        "ma_turn_score":(
+            2 if pd.notna(cur.ema112_slope20) and cur.ema112_slope20>0 else
+            (1 if pd.notna(cur.ema112_slope20) and cur.ema112_slope20>-1 else 0)
         ),
         "days_since_5x112":cross5_112,"days_since_price_x112":cross112,"days_since_price_x224":cross224,
         "bowl3_stage":bowl.get("stage",""),"bowl1_decline_days":bowl.get("decline_days",np.nan),
@@ -329,7 +341,7 @@ def render(z,r,out_dir):
     av.plot(x,t.v20,linewidth=.8,label="V20")
     title=(f'{r["code"]} | techniques {int(r["public_technique_count"])} | '
            f'context {int(r["public_context_count"])} | proxy {int(r["research_proxy_count"])} | '
-           f'support {int(r["support_context_count"])}')
+           f'support {int(r["support_context_count"])} | {r.get("ma_turn_quality","")}')
     ax.set_title(title)
     ax.text(.01,.98,r["signals"],transform=ax.transAxes,va="top",fontsize=8)
     ax.legend(ncol=5,fontsize=8); ax.grid(alpha=.15); av.grid(alpha=.15)
@@ -353,12 +365,18 @@ def main():
     out=pd.DataFrame(rows)
     if not out.empty:
         out["rank_group"]=np.select(
-            [out.public_technique_count>=2,out.public_technique_count==1],
-            ["PUBLIC_MULTI","PUBLIC_SINGLE"],default="PROXY_ONLY"
+            [
+                (out.public_technique_count>=2)&(out.ma_turn_score>=2),
+                out.public_technique_count>=2,
+                (out.public_technique_count==1)&(out.ma_turn_score>=2),
+                out.public_technique_count==1
+            ],
+            ["PUBLIC_MULTI_TURNED","PUBLIC_MULTI_EARLY","PUBLIC_SINGLE_TURNED","PUBLIC_SINGLE_EARLY"],
+            default="PROXY_ONLY"
         )
         out=out.sort_values(
-            ["public_technique_count","public_context_count","research_proxy_count","support_context_count","share_balance_error","avg_turnover20"],
-            ascending=[False,False,False,False,True,False],na_position="last"
+            ["public_technique_count","ma_turn_score","research_proxy_count","support_context_count","public_context_count","share_balance_error","avg_turnover20"],
+            ascending=[False,False,False,False,False,True,False],na_position="last"
         ).reset_index(drop=True)
         out["rank"]=np.arange(1,len(out)+1)
     out.to_csv(a.out/"signal_matrix_all.csv",index=False,encoding="utf-8-sig")
@@ -366,6 +384,8 @@ def main():
     focus.to_csv(a.out/"signal_matrix_confluence2plus.csv",index=False,encoding="utf-8-sig")
     public_focus=out[out.public_technique_count>=1].copy() if not out.empty else out.copy()
     public_focus.to_csv(a.out/"signal_matrix_public_focus.csv",index=False,encoding="utf-8-sig")
+    public_turning=out[(out.public_technique_count>=1)&(out.ma_turn_score>=2)].copy() if not out.empty else out.copy()
+    public_turning.to_csv(a.out/"signal_matrix_public_turning.csv",index=False,encoding="utf-8-sig")
     proxy_only=out[out.public_technique_count.eq(0)].copy() if not out.empty else out.copy()
     proxy_only.to_csv(a.out/"signal_matrix_proxy_only.csv",index=False,encoding="utf-8-sig")
     if not out.empty:
@@ -384,7 +404,7 @@ def main():
             render(series[r.code],r,a.out/"charts")
     print(f"latest={latest.date()} matrix_any={len(out)} confluence2plus={len(focus)} public_focus={len(public_focus) if not out.empty else 0}")
     if not out.empty:
-        cols=["rank","rank_group","code","name","exchange","current_close","public_technique_count","public_context_count","research_proxy_count","support_context_count","confluence_count","signals",
+        cols=["rank","rank_group","code","name","exchange","current_close","public_technique_count","public_context_count","research_proxy_count","support_context_count","broad_context_count","confluence_count","ma_turn_quality","signals",
               "share_ma","share_recovery_ratio","share_cycle_mean_ratio","blue_dot_bb35_dist_pct",
               "max_volume_ratio20_last20","current_volume_ratio20","dist112_pct","dist224_pct","dist448_pct"]
         print(out[cols].head(40).to_string(index=False))
