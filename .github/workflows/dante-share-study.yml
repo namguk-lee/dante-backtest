@@ -45,6 +45,17 @@ jobs:
           --kq krx_share/kq_eod.parquet
           --cases research/dante/dante_share_1to1_cases.csv
           --out dante_share_study
+      - name: Upload geometry early
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-share-geometry-${{ github.run_number }}
+          retention-days: 30
+          path: |
+            dante_share_study/share_1to1_geometry_v2.csv
+            dante_share_study/share_1to1_metric_summary_v2.csv
+            dante_share_study/share_1to1_misses_v2.csv
+            dante_share_study/charts/
+
       - name: Run matched-market proxy control study
         run: >-
           python research/dante/dante_share_proxy_control_study.py
