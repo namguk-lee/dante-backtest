@@ -70,13 +70,24 @@ jobs:
           --signal-start "$SIGNAL_START"
           --roundtrip-cost-bps 0
 
-      - name: Print TEST summary
+      - name: Run locked V4 filter validation
+        run: >-
+          python research/dante/dante_filter_validation_v4.py
+          --signals dante_results/signals.csv
+          --trades dante_results/stop_trades.csv
+          --out dante_results
+
+      - name: Print validation summaries
         if: success()
         run: |
           python - <<'PY'
           import pandas as pd
+          print('=== V3.1 TEST stop summary ===')
           x = pd.read_csv('dante_results/split_comparison.csv')
           print(x[x['split'].eq('TEST')].to_string(index=False))
+          print('\n=== V4 locked filter ===')
+          y = pd.read_csv('dante_results/v4_split_comparison.csv')
+          print(y.to_string(index=False))
           PY
 
       - name: Upload research results
