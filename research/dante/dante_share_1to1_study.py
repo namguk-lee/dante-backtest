@@ -24,6 +24,7 @@ import math
 import numpy as np
 import pandas as pd
 import FinanceDataReader as fdr
+import FinanceDataReader as fdr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -168,6 +169,56 @@ def contiguous_runs(z,cross_i):
     while k+1<len(z) and pd.notna(z.at[k+1,"ma"]) and z.at[k+1,"ac"]>=z.at[k+1,"ma"]:
         k+=1
     return pre_start,pre_end,cross_i,k
+
+def latest_local_trough_features(z,cross_i):
+    """Compare the current buy-side wave with the latest meaningful sell-side trough.
+
+    This is closer to the public visual explanation than fixed windows:
+    locate local minima in distance-to-MA before the structural up-cross, then
+    compare the current distance above the MA with that sell-side excursion.
+    Both percent-normalized and absolute-price box heights are tested.
+    """
+    rec={}
+    current_close=float(z.iloc[-1].ac)
+    current_ma=float(z.iloc[-1].ma) if pd.notna(z.iloc[-1].ma) else np.nan
+    current_pct=(current_close-current_ma)/current_ma if pd.notna(current_ma) and current_ma>0 else np.nan
+    current_abs=current_close-current_ma if pd.notna(current_ma) else np.nan
+
+    for lookback in (15,20,30,40,60,80):
+        s=max(3,cross_i-lookback); e=cross_i
+        mins=[]
+        for i in range(s,e):
+            if i<3 or i+3>=len(z) or pd.isna(z.at[i,"ma"]):continue
+            d=float(z.at[i,"dist"])
+            if d>=0:continue
+            if d<=float(z.loc[i-3:i+3,"dist"].min())+1e-12:
+                mins.append(i)
+        if not mins:
+            q=z.iloc[s:e]
+            q=q[q.dist<0]
+            if not q.empty:mins=[int(q.dist.idxmin())]
+        if not mins:
+            rec[f"local_trough_date_{lookback}"]=pd.NaT
+            rec[f"ratio_local_pct_{lookback}"]=np.nan
+            rec[f"ratio_local_abs_{lookback}"]=np.nan
+            rec[f"ratio_local_low_abs_{lookback}"]=np.nan
+            continue
+
+        # Latest local sell-side trough is the wave immediately preceding the recovery.
+        ti=mins[-1]
+        trough_close=float(z.at[ti,"ac"])
+        trough_low=float(z.at[ti,"al"])
+        trough_ma=float(z.at[ti,"ma"])
+        sell_pct=max(0,(trough_ma-trough_close)/trough_ma) if trough_ma>0 else np.nan
+        sell_abs=max(0,trough_ma-trough_close)
+        sell_low_abs=max(0,trough_ma-trough_low)
+        rec[f"local_trough_date_{lookback}"]=z.at[ti,"date"]
+        rec[f"local_trough_dist_pct_{lookback}"]=sell_pct*100 if pd.notna(sell_pct) else np.nan
+        rec[f"ratio_local_pct_{lookback}"]=safe_ratio(max(0,current_pct),sell_pct)
+        rec[f"ratio_local_abs_{lookback}"]=safe_ratio(max(0,current_abs),sell_abs)
+        rec[f"ratio_local_low_abs_{lookback}"]=safe_ratio(max(0,current_abs),sell_low_abs)
+
+    return rec
 
 def window_share_features(z):
     rec={}
