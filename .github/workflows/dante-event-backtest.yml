@@ -8,6 +8,10 @@ on:
       - 'research/dante/dante_event_first_backtest.py'
   workflow_dispatch:
 
+concurrency:
+  group: dante-event-backtest
+  cancel-in-progress: true
+
 jobs:
   backtest:
     runs-on: ubuntu-latest
