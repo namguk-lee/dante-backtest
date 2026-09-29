@@ -18,7 +18,7 @@ import pandas as pd
 from dante_signal_matrix_research import load, features
 from dante_public_technique_backtest import days_since, bowl_mask, sparse_events, split_name
 
-TECHS=("256_LONG","MA_HIT_112_224","MA_HIT_224_448","BOWL3_STRUCTURE")
+TECHS=("256_LONG","MA_HIT_112_224","MA_HIT_224_448","BOWL3_STRUCTURE","PUBLIC_224_4MONTH_PULLBACK")
 TOLS=(0.03,0.05,0.08)
 
 def args():
@@ -30,6 +30,19 @@ def args():
     p.add_argument("--cooldown",type=int,default=20)
     p.add_argument("--entry-window",type=int,default=20)
     return p.parse_args()
+
+def public224_recovery_cross(z,min_turnover,min_below_sessions=80):
+    """First close recovery above EMA224 after a long continuous stay below it."""
+    liq=z.amount20>=min_turnover
+    cross=(z.ac>=z.ema224)&(z.ac.shift(1)<z.ema224.shift(1))
+    out=np.zeros(len(z),dtype=bool)
+    for i in np.flatnonzero(cross.fillna(False).to_numpy()):
+        j=i-1; n=0
+        while j>=0 and pd.notna(z.at[j,"ema224"]) and z.at[j,"ac"]<z.at[j,"ema224"]:
+            n+=1; j-=1
+        if n>=min_below_sessions and bool(liq.iloc[i]):
+            out[i]=True
+    return pd.Series(out,index=z.index)
 
 def setup_masks(z,min_turnover):
     liq=z.amount20>=min_turnover
@@ -43,6 +56,7 @@ def setup_masks(z,min_turnover):
         "MA_HIT_112_224":liq&reverse&(d112<=60)&(z.ac>=z.ema112)&(z.ac<z.ema224),
         "MA_HIT_224_448":liq&(d224<=60)&(z.ac>=z.ema224)&(z.ac<z.ema448),
         "BOWL3_STRUCTURE":liq&bowl_mask(z),
+        "PUBLIC_224_4MONTH_PULLBACK":public224_recovery_cross(z,min_turnover,80),
     }
 
 def ma_pair(tech):
