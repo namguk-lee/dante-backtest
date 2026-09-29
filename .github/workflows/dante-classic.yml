@@ -45,7 +45,7 @@ jobs:
           --ko krx_classic/ko_eod.parquet
           --kq krx_classic/kq_eod.parquet
           --out dante_classic_results
-          --max-charts 8
+          --max-charts 12
           --min-turnover 5000000000
       - name: Upload classic results
         if: always()
