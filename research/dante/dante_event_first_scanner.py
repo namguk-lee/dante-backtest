@@ -18,6 +18,9 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import FinanceDataReader as fdr
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 KST=ZoneInfo("Asia/Seoul")
 
@@ -140,6 +143,74 @@ def stitch_one(hist,q):
         raw=float(rec["close"])
     out=pd.concat([older,pd.DataFrame(rows)],ignore_index=True,sort=False)
     return out.sort_values("date").drop_duplicates("date",keep="last")
+
+
+def render_candidate_chart(z,rec,out_dir,bars=120):
+    """Render an explainable chart for CLASSIC watch candidates."""
+    t=z.sort_values("date").tail(bars).copy().reset_index(drop=True)
+    if t.empty:return
+    cur=t.iloc[-1]
+    factor=float(cur.ac/cur.close) if float(cur.close)>0 else 1.0
+    for src,dst in [("ao","o"),("ah","h"),("al","l"),("ac","c"),
+                    ("ema112","e112"),("ema224","e224"),("ema448","e448")]:
+        t[dst]=t[src]/factor
+    x=np.arange(len(t))
+    fig,(ax,av)=plt.subplots(2,1,figsize=(14,8),sharex=True,gridspec_kw={"height_ratios":[4,1]})
+    for i,r in t.iterrows():
+        ax.vlines(i,r.l,r.h,linewidth=.8)
+        ax.hlines(r.o,i-.32,i,linewidth=.8)
+        ax.hlines(r.c,i,i+.32,linewidth=.8)
+    ax.plot(x,t.e112,label="EMA112",linewidth=1.1)
+    ax.plot(x,t.e224,label="EMA224",linewidth=1.2)
+    ax.plot(x,t.e448,label="EMA448",linewidth=1.2)
+
+    event_date=pd.Timestamp(rec.get("event_date")) if pd.notna(rec.get("event_date")) else None
+    pull_date=pd.Timestamp(rec.get("pullback_date")) if pd.notna(rec.get("pullback_date")) else None
+    if event_date is not None:
+        hit=t.index[t.date.eq(event_date)]
+        if len(hit):ax.axvline(int(hit[-1]),linestyle="--",linewidth=1,label="Event")
+    if pull_date is not None:
+        hit=t.index[t.date.eq(pull_date)]
+        if len(hit):ax.axvline(int(hit[-1]),linestyle=":",linewidth=1.2,label="Pullback")
+
+    levels=[
+        ("Anchor invalid",rec.get("anchor_invalidation")),
+        ("224 confirm",rec.get("trigger_224_confirm")),
+        ("E4 1D",rec.get("reaccel_trigger_1d")),
+        ("E4 3D",rec.get("reaccel_trigger_3d")),
+        ("E4 5D",rec.get("reaccel_trigger_5d")),
+    ]
+    for label,val in levels:
+        if pd.notna(val):
+            ax.axhline(float(val),linewidth=.7,alpha=.55)
+            ax.text(len(t)-1,float(val),f" {label} {float(val):,.0f}",fontsize=8,va="bottom")
+
+    av.bar(x,t.volume)
+    av.set_ylabel("Volume")
+    ax.set_ylabel("Price")
+    ax.grid(alpha=.15)
+    av.grid(alpha=.15)
+    ax.legend(loc="upper left",ncol=5,fontsize=8)
+
+    step=max(1,len(t)//8)
+    ticks=list(range(0,len(t),step))
+    if ticks[-1]!=len(t)-1:ticks.append(len(t)-1)
+    av.set_xticks(ticks)
+    av.set_xticklabels([pd.Timestamp(t.at[i,"date"]).strftime("%m-%d") for i in ticks],rotation=0)
+
+    title=(f'{rec.get("code","")} {rec.get("name","")} | '
+           f'{rec.get("classic_tier","")} {rec.get("action_status","")} | {rec.get("category","")}')
+    ax.set_title(title)
+    note=(f'event {pd.Timestamp(rec.get("event_date")).date()} '
+          f'+{float(rec.get("event_ret_pct",np.nan)):.1f}% vol x{float(rec.get("event_volume_ratio",np.nan)):.1f} | '
+          f'224 dist {float(rec.get("dist224_pct",np.nan)):.1f}% | '
+          f'448 room {float(rec.get("headroom448_pct",np.nan)):.1f}% | '
+          f'anchor closes below {int(rec.get("closes_below_anchor",0))}')
+    fig.text(.01,.01,note,fontsize=8)
+    fig.tight_layout(rect=[0,.03,1,1])
+    out_dir.mkdir(parents=True,exist_ok=True)
+    fig.savefig(out_dir/f'{rec.get("code","unknown")}_{rec.get("category","candidate")}.png',dpi=150)
+    plt.close(fig)
 
 def classify(z,event_date):
     z=z.sort_values("date").copy()
@@ -351,7 +422,7 @@ def main():
             if i%50==0 or i==len(futs):print(f"refresh {i}/{len(futs)}",flush=True)
     res={sid:(q,err) for sid,q,err in results}
 
-    rows=[]; watch=[]
+    rows=[]; watch=[]; chart_inputs=[]
     for rec in stage1.to_dict("records"):
         hist=panel[panel.series_id.eq(rec["series_id"])].sort_values("date").copy()
         q,err=res.get(rec["series_id"],(pd.DataFrame(),"missing"))
@@ -384,7 +455,10 @@ def main():
         if not cc:
             watch.append({**refreshed_rec,**diagnose_rejection(z,e.date),"refresh_error":err})
             continue
-        rows.append({**refreshed_rec,**cc,"refresh_error":err})
+        combined={**refreshed_rec,**cc,"refresh_error":err}
+        rows.append(combined)
+        if combined.get("classic_tier",""):
+            chart_inputs.append((combined,z.copy()))
     watch_df=pd.DataFrame(watch)
     if not watch_df.empty:
         watch_df=watch_df.sort_values(["event_date","event_volume_ratio"],ascending=[False,False])
@@ -394,7 +468,13 @@ def main():
         out=out.sort_values(["score","event_date"],ascending=[False,False]).reset_index(drop=True)
         out["rank"]=np.arange(1,len(out)+1)
     out.to_csv(a.out/"event_first_candidates.csv",index=False,encoding="utf-8-sig")
-    print(f"event_first_candidates={len(out):,}",flush=True)
+    charts_dir=a.out/"charts"
+    for rec,z in chart_inputs:
+        try:
+            render_candidate_chart(z,rec,charts_dir)
+        except Exception as exc:
+            print(f'chart_failed code={rec.get("code")} error={exc!r}',flush=True)
+    print(f"event_first_candidates={len(out):,} charts={len(chart_inputs):,}",flush=True)
     if not out.empty:
         classic=out[out["classic_tier"].ne("")].copy()
         if not classic.empty:
