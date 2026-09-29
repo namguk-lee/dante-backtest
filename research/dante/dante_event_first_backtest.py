@@ -520,6 +520,66 @@ def summarize_trade_path(ev):
                     out.append(rec)
     return pd.DataFrame(out)
 
+
+def summarize_e4_confirmation(ev):
+    """Describe E4 confirmation quality without promoting any bucket to a trading rule."""
+    if ev.empty:return pd.DataFrame()
+    x=ev[ev["kind"]=="E4_REACCELERATION"].copy()
+    if x.empty:return pd.DataFrame()
+    x["reaccel_volume_bin"]=pd.cut(
+        x["reaccel_volume_ratio"],[-np.inf,.8,1.2,2.0,np.inf],
+        labels=["LT0_8","0_8_1_2","1_2_2_0","GE2_0"],right=False,
+    )
+    x["reaccel_dist224_bin"]=pd.cut(
+        x["reaccel_dist224"],[-np.inf,.03,.06,.10,np.inf],
+        labels=["LT3","3_6","6_10","GE10"],right=False,
+    )
+    x["reaccel_ema5_15_bin"]=pd.cut(
+        x["reaccel_ema5_15_gap"],[-np.inf,.01,.03,np.inf],
+        labels=["LT1","1_3","GE3"],right=False,
+    )
+    x["reaccel_headroom_bin"]=pd.cut(
+        x["reaccel_headroom448"],[-np.inf,.05,.10,.20,np.inf],
+        labels=["LT5","5_10","10_20","GE20"],right=False,
+    )
+    x["pull_to_reaccel_bin"]=pd.cut(
+        x["pull_to_reaccel_days"],[-np.inf,3,6,np.inf],
+        labels=["LE2","3_5","GE6"],right=False,
+    )
+    dimensions=[
+        ("REACCEL_VOLUME","reaccel_volume_bin"),
+        ("REACCEL_DIST224","reaccel_dist224_bin"),
+        ("REACCEL_EMA5_15","reaccel_ema5_15_bin"),
+        ("REACCEL_HEADROOM448","reaccel_headroom_bin"),
+        ("PULL_TO_REACCEL","pull_to_reaccel_bin"),
+        ("EVENT_QUALITY","event_quality"),
+        ("EXCHANGE","exchange"),
+    ]
+    out=[]
+    for view,col in dimensions:
+        for (sp,bucket),q in x.groupby(["split",col],dropna=False,observed=True):
+            rec={"view":view,"bucket":bucket,"split":sp,"n":len(q)}
+            for h in (20,60):
+                s=q[f"ret{h}"].dropna()
+                rec[f"n{h}"]=len(s)
+                rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+                rec[f"median{h}"]=s.median() if len(s) else np.nan
+                rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+                full=q[(q[f"supportclose{h}_valid"]==True)&(q[f"supportclose{h}_full_horizon"]==True)].copy()
+                if len(full):
+                    outcome=full[f"supportclose{h}_outcome"].astype(str)
+                    rec[f"target{h}"]=(outcome=="TARGET").mean()
+                    rec[f"stop{h}"]=outcome.str.startswith("STOP").mean()
+                    rec[f"pathmean{h}"]=full[f"supportclose{h}_net_return"].mean()
+                    rec[f"pathmedian{h}"]=full[f"supportclose{h}_net_return"].median()
+                else:
+                    rec[f"target{h}"]=np.nan
+                    rec[f"stop{h}"]=np.nan
+                    rec[f"pathmean{h}"]=np.nan
+                    rec[f"pathmedian{h}"]=np.nan
+            out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -565,6 +625,8 @@ def main():
     rg.to_csv(a.out/"event_first_regime_dynamics.csv",index=False,encoding="utf-8-sig")
     tp=summarize_trade_path(ev)
     tp.to_csv(a.out/"event_first_trade_path.csv",index=False,encoding="utf-8-sig")
+    e4=summarize_e4_confirmation(ev)
+    e4.to_csv(a.out/"event_first_e4_confirmation.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -603,5 +665,12 @@ def main():
         for c in ["mean_r","median_r"]:
             if c in show:show[c]=show[c].round(2)
         print("\n=== E3/E4 STRUCTURAL TRADE PATH: STOP MODEL COMPARISON VS EMA448 TARGET ===")
+        print(show.to_string(index=False))
+    if not e4.empty:
+        show=e4.copy()
+        for c in ["mean20","median20","win20","target20","stop20","pathmean20","pathmedian20",
+                  "mean60","median60","win60","target60","stop60","pathmean60","pathmedian60"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        print("\n=== E4 CONFIRMATION QUALITY DIAGNOSTIC (%) ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
