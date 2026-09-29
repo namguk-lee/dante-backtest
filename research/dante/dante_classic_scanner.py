@@ -260,9 +260,9 @@ def classify_one(g,min_turnover):
     score+=4 if ema112_rising else 0
     score+=4 if near224 else 0
 
-    if all([bowl_duration_ok,four_month_ok,big_decline,anchor_strict,concrete_loose,had112,near224]):
+    if all([bowl_duration_ok,four_month_ok,big_decline,base_reasonable,anchor_strict,concrete_loose,had112,ema112_rising,near224]):
         tier="A"
-    elif all([bowl_duration_ok,four_month_ok,anchor_strict,had112,near224]):
+    elif all([bowl_duration_ok,four_month_ok,base_reasonable,anchor_strict,had112,ema112_rising,near224]):
         tier="B"
     else:
         tier="NEAR"
@@ -290,6 +290,7 @@ def classify_one(g,min_turnover):
         "bowl2_over_bowl1":bowl["bowl2_over_bowl1"],
         "bowl1_decline_pct":bowl["bowl1_decline_pct"]*100,
         "bowl2_range_pct":bowl["bowl2_range_pct"]*100,
+        "bowl2_net_change_pct":bowl["bowl2_net_change_pct"]*100,
         "below224_days_before_approach":bowl["below224_days_before_approach"],
         "bowl_duration_ok":bowl_duration_ok,"four_month_below224":four_month_ok,
         "anchor_date":z.at[anchor["anchor_i"],"date"],"anchor_open":anchor["anchor_open_adj"]/factor,
