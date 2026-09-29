@@ -265,11 +265,13 @@ def scan(z,min_turnover):
     # Do not count correlated context/support proxies as independent public techniques.
     technique_count=sum(technique_flags.values())
     context_count=sum(context_flags.values())
-    proxy_count=int(sig_share)+int(sig_blue)
+    # Share proxy remains a ranking proxy. Blue-dot BB35 stays visible only
+    # as broad chart context because historical validation was not robust.
+    proxy_count=int(sig_share)
     # Concrete proxy is currently very broad; keep it visible but do not let it
     # inflate ranking/confluence until its selectivity is improved.
     support_count=int(sig_accum_cool)
-    broad_context_count=int(conc)
+    broad_context_count=int(conc)+int(sig_blue)
     total=technique_count+proxy_count+support_count
     if total<1:return None
 
