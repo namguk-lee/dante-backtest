@@ -7,6 +7,7 @@ on:
       - '.github/workflows/dante-blue-dot-study.yml'
       - 'research/dante/dante_blue_dot_cases.csv'
       - 'research/dante/dante_blue_dot_study.py'
+      - 'research/dante/dante_blue_dot_control_study.py'
   workflow_dispatch:
 
 jobs:
@@ -40,6 +41,13 @@ jobs:
       - name: Run blue-dot grid study
         run: >-
           python research/dante/dante_blue_dot_study.py
+          --ko krx_blue_dot/ko_eod.parquet
+          --kq krx_blue_dot/kq_eod.parquet
+          --cases research/dante/dante_blue_dot_cases.csv
+          --out dante_blue_dot_study
+      - name: Run matched-market blue-dot controls
+        run: >-
+          python research/dante/dante_blue_dot_control_study.py
           --ko krx_blue_dot/ko_eod.parquet
           --kq krx_blue_dot/kq_eod.parquet
           --cases research/dante/dante_blue_dot_cases.csv
