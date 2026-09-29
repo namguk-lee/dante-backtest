@@ -18,7 +18,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'research/dante/**'
+      - 'research/dante/collect_marcap_full_market.py'
+      - 'research/dante/dante_full_market_backtest_v3.py'
+      - 'research/dante/dante_filter_validation_v4.py'
+      - 'research/dante/dante_regime_enrichment_v5.py'
+      - 'research/dante/dante_recommendation_scanner.py'
+      - 'research/dante/requirements.txt'
       - '.github/workflows/dante-full-market.yml'
 
 concurrency:
@@ -68,54 +73,3 @@ jobs:
           --kq krx_data/kq_eod.parquet
           --out dante_results
           --signal-start "$SIGNAL_START"
-          --roundtrip-cost-bps 0
-
-      - name: Run locked V4 filter validation
-        run: >-
-          python research/dante/dante_filter_validation_v4.py
-          --signals dante_results/signals.csv
-          --trades dante_results/stop_trades.csv
-          --out dante_results
-
-      - name: Enrich signals with V5 market regime
-        run: >-
-          python research/dante/dante_regime_enrichment_v5.py
-          --ko krx_data/ko_eod.parquet
-          --kq krx_data/kq_eod.parquet
-          --signals dante_results/signals.csv
-          --out dante_results
-
-      - name: Build recommendation candidates
-        run: >-
-          python research/dante/dante_recommendation_scanner.py
-          --ko krx_data/ko_eod.parquet
-          --kq krx_data/kq_eod.parquet
-          --out dante_results
-          --top 30
-          --min-turnover 5000000000
-
-      - name: Print validation summaries
-        if: success()
-        run: |
-          python - <<'PY'
-          import pandas as pd
-          print('=== V3.1 TEST stop summary ===')
-          x = pd.read_csv('dante_results/split_comparison.csv')
-          print(x[x['split'].eq('TEST')].to_string(index=False))
-          print('\n=== V4 locked filter ===')
-          y = pd.read_csv('dante_results/v4_split_comparison.csv')
-          print(y.to_string(index=False))
-          print('\n=== V5 market regime (development rows) ===')
-          z = pd.read_csv('dante_results/v5_regime_comparison.csv')
-          print(z[z['split'].isin(['TRAIN','VALID'])].to_string(index=False))
-          PY
-
-      - name: Upload research results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dante-full-market-results-${{ github.run_number }}
-          retention-days: 30
-          path: |
-            dante_results/
-            krx_data/universe.csv
