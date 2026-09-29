@@ -34,7 +34,7 @@ def feat(g):
     g=g.sort_values("date").copy()
     f=(g.adjusted_close/g.close).replace([np.inf,-np.inf],np.nan).ffill().bfill().fillna(1.0)
     g["ao"]=g.open*f; g["ah"]=g.high*f; g["al"]=g.low*f; g["ac"]=g.adjusted_close
-    for n in (5,15,33,56,112,224,448):g[f"ema{n}"]=g.ac.ewm(span=n,adjust=False,min_periods=n).mean()
+    for n in (5,15,33,56,60,112,224,448):g[f"ema{n}"]=g.ac.ewm(span=n,adjust=False,min_periods=n).mean()
     g["v20"]=g.volume.rolling(20,min_periods=20).mean()
     g["amt20"]=g.amount.rolling(20,min_periods=20).mean()
     g["vr"]=g.volume/g.v20
@@ -1005,6 +1005,130 @@ def summarize_public_112_concrete_proxy(ev):
         out.append(rec)
     return pd.DataFrame(out)
 
+PUBLIC_CASES=[
+    {"label":"OFFICIAL_REVIEW","code":"413630","name":"씨피시스템","analysis_date":"2025-08-01"},
+    {"label":"OFFICIAL_REVIEW","code":"146320","name":"비씨엔씨","analysis_date":"2025-08-08"},
+    {"label":"OFFICIAL_REVIEW","code":"107600","name":"새빗켐","analysis_date":"2025-08-01"},
+    {"label":"OFFICIAL_REVIEW","code":"102460","name":"이연제약","analysis_date":"2025-06-30"},
+    {"label":"OFFICIAL_REVIEW","code":"004980","name":"성신양회","analysis_date":"2025-12-09"},
+    # Current-screen controls. They are NOT labelled as failed trades; the purpose is
+    # simply to compare today's scanner geometry with documented public examples.
+    {"label":"CURRENT_CONTROL","code":"432470","name":"케이엔에스","analysis_date":"2026-09-28"},
+    {"label":"CURRENT_CONTROL","code":"443670","name":"에스피소프트","analysis_date":"2026-09-28"},
+]
+
+def _consecutive_true_ending(mask):
+    n=0
+    for v in reversed(mask.astype(bool).tolist()):
+        if not v:break
+        n+=1
+    return n
+
+def extract_public_case_features(panel):
+    """Recalculate public-example dates with the same transparent feature engine."""
+    if "code" not in panel.columns:return pd.DataFrame()
+    raw=panel.copy()
+    raw["code_norm"]=raw["code"].astype(str).str.extract(r"(\\d+)")[0].str.zfill(6)
+    out=[]
+    for case in PUBLIC_CASES:
+        target=pd.Timestamp(case["analysis_date"])
+        cand=raw[raw["code_norm"].eq(case["code"])].copy()
+        if cand.empty:
+            out.append({**case,"found":False})
+            continue
+        choices=[]
+        for sid,g in cand.groupby("series_id",sort=False):
+            z=feat(g)
+            q=z[z["date"]<=target]
+            if q.empty:continue
+            j=int(q.index[-1])
+            gap_days=int((target-pd.Timestamp(z.at[j,"date"])).days)
+            if gap_days>7:continue
+            choices.append((gap_days,len(z),sid,z,j))
+        if not choices:
+            out.append({**case,"found":False})
+            continue
+        choices.sort(key=lambda t:(t[0],-t[1]))
+        _,_,sid,z,j=choices[0]
+        r=z.iloc[j]
+        prev=z.iloc[:j+1]
+        look60=prev.tail(60)
+        look120=prev.tail(120)
+        look252=prev.tail(252)
+
+        # Reuse the event definition, then select only information known by analysis date.
+        strong=(
+            (prev.ret1>=.05)&(prev.body>=.035)&(prev.vr>=2)&(prev.amt20>=5_000_000_000)
+        ).fillna(False)
+        ids=np.flatnonzero(strong.to_numpy())
+        last_event_i=int(ids[-1]) if len(ids) else None
+
+        event_days=np.nan; event_ret=np.nan; event_vr=np.nan; event_body=np.nan
+        event_break20=False; event_open=np.nan; event_close=np.nan
+        closes_below_event_open=np.nan; post_event_drawdown=np.nan
+        if last_event_i is not None:
+            er=prev.iloc[last_event_i]
+            event_days=int(j-last_event_i)
+            event_ret=float(er.ret1); event_vr=float(er.vr); event_body=float(er.body)
+            event_break20=bool(er.event_breakout20)
+            event_open=float(er.ao); event_close=float(er.ac)
+            pe=prev.iloc[last_event_i:j+1]
+            closes_below_event_open=int((pe.ac<event_open).sum())
+            ph=float(pe.ah.max())
+            post_event_drawdown=float(r.ac/ph-1) if ph>0 else np.nan
+
+        bowl=public_bowl_duration_context(z,j)
+        above112=(prev.ac>=prev.ema112).fillna(False)
+        above224=(prev.ac>=prev.ema224).fillna(False)
+        ema60=float(r.ema60) if pd.notna(r.ema60) else np.nan
+        ema112=float(r.ema112) if pd.notna(r.ema112) else np.nan
+        ema224=float(r.ema224) if pd.notna(r.ema224) else np.nan
+        ema448=float(r.ema448) if pd.notna(r.ema448) else np.nan
+        ac=float(r.ac)
+        max252=float(look252.ah.max()) if len(look252) else np.nan
+        min120=float(look120.al.min()) if len(look120) else np.nan
+        rec={
+            **case,
+            "found":True,
+            "series_id":sid,
+            "actual_date":pd.Timestamp(r.date),
+            "close":ac,
+            "ema60":ema60,"ema112":ema112,"ema224":ema224,"ema448":ema448,
+            "reverse112_224_448":bool(ema112<ema224<ema448) if all(math.isfinite(v) for v in [ema112,ema224,ema448]) else False,
+            "close_above60":bool(ac>=ema60) if math.isfinite(ema60) else False,
+            "close_above112":bool(ac>=ema112) if math.isfinite(ema112) else False,
+            "close_above224":bool(ac>=ema224) if math.isfinite(ema224) else False,
+            "dist112":float(ac/ema112-1) if ema112>0 else np.nan,
+            "dist224":float(ac/ema224-1) if ema224>0 else np.nan,
+            "headroom224":float(ema224/ac-1) if ac>0 and ema224>ac else 0.0,
+            "headroom448":float(ema448/ac-1) if ac>0 and ema448>ac else 0.0,
+            "gap112_224":float(abs(ema224-ema112)/ema224) if ema224>0 else np.nan,
+            "ema112_slope20":float(r.ema112_slope20) if pd.notna(r.ema112_slope20) else np.nan,
+            "ema224_slope20":float(r.ema224_slope20) if pd.notna(r.ema224_slope20) else np.nan,
+            "above112_streak":_consecutive_true_ending(above112.tail(120)),
+            "above224_streak":_consecutive_true_ending(above224.tail(120)),
+            "below224_prev80":float(r.below80) if pd.notna(r.below80) else np.nan,
+            "ret20":float(ac/prev.iloc[-21].ac-1) if len(prev)>=21 else np.nan,
+            "ret60":float(ac/prev.iloc[-61].ac-1) if len(prev)>=61 else np.nan,
+            "from_120d_low":float(ac/min120-1) if math.isfinite(min120) and min120>0 else np.nan,
+            "drawdown_252d_high":float(ac/max252-1) if math.isfinite(max252) and max252>0 else np.nan,
+            "volume_ratio":float(r.vr) if pd.notna(r.vr) else np.nan,
+            "max_volume_ratio60":float(pd.to_numeric(look60.vr,errors="coerce").max()) if len(look60) else np.nan,
+            "strong_events60":int(((look60.ret1>=.05)&(look60.body>=.035)&(look60.vr>=2)&(look60.amt20>=5_000_000_000)).fillna(False).sum()),
+            "last_event_days":event_days,
+            "last_event_ret":event_ret,
+            "last_event_volume_ratio":event_vr,
+            "last_event_body":event_body,
+            "last_event_break20":event_break20,
+            "closes_below_event_open":closes_below_event_open,
+            "post_event_drawdown":post_event_drawdown,
+            "prior20_break_now":bool(r.event_breakout20),
+            "dist_prior20_high":float(ac/r.prior20_high-1) if pd.notna(r.prior20_high) and r.prior20_high>0 else np.nan,
+        }
+        rec.update(bowl)
+        out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -1062,6 +1186,8 @@ def main():
     rr112.to_csv(a.out/"event_first_public_112_rr.csv",index=False,encoding="utf-8-sig")
     concrete112=summarize_public_112_concrete_proxy(ev)
     concrete112.to_csv(a.out/"event_first_public_112_concrete_proxy.csv",index=False,encoding="utf-8-sig")
+    public_cases=extract_public_case_features(panel)
+    public_cases.to_csv(a.out/"public_dante_case_features.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -1157,4 +1283,30 @@ def main():
             show["median_support112_rr"]=show["median_support112_rr"].round(2)
         print("\n=== E112 PUBLIC CONCRETE PROXY: PRIOR-20D-HILL BREAK/HOLD (%) ===")
         print(show.to_string(index=False))
+    if not public_cases.empty:
+        show=public_cases.copy()
+        pctcols=[
+            "dist112","dist224","headroom224","headroom448","gap112_224",
+            "ema112_slope20","ema224_slope20","ret20","ret60","from_120d_low",
+            "drawdown_252d_high","last_event_ret","last_event_body","post_event_drawdown",
+            "dist_prior20_high","bowl_decline_pct"
+        ]
+        for c in pctcols:
+            if c in show:show[c]=(pd.to_numeric(show[c],errors="coerce")*100).round(2)
+        for c in ["volume_ratio","max_volume_ratio60","last_event_volume_ratio","bowl_base_to_decline_ratio"]:
+            if c in show:show[c]=pd.to_numeric(show[c],errors="coerce").round(2)
+        cols=[
+            "label","code","name","analysis_date","actual_date","close",
+            "reverse112_224_448","close_above60","close_above112","close_above224",
+            "dist112","dist224","headroom224","headroom448","gap112_224",
+            "ema112_slope20","ema224_slope20","above112_streak","below224_prev80",
+            "ret20","ret60","from_120d_low","drawdown_252d_high",
+            "strong_events60","last_event_days","last_event_ret","last_event_volume_ratio",
+            "last_event_break20","closes_below_event_open","post_event_drawdown",
+            "public_bowl_duration_ok","bowl_decline_days","bowl_base_days",
+            "bowl_base_to_decline_ratio","bowl_decline_pct"
+        ]
+        cols=[c for c in cols if c in show.columns]
+        print("\n=== DOCUMENTED PUBLIC DANTE CASE FEATURES VS CURRENT CONTROLS ===")
+        print(show[cols].to_string(index=False))
 if __name__=="__main__":main()
