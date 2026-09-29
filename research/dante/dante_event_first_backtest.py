@@ -71,11 +71,14 @@ def scan_one(g,start,cost):
     z=feat(g)
     rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999}
     start_i=max(500,int(z.index[z.date>=start][0]) if (z.date>=start).any() else len(z))
-    for i in range(start_i,len(z)-62):
+    strong_mask=(
+        (z.ret1>=.05) & (z.body>=.035) & (z.vr>=2) & (z.amt20>=5_000_000_000) &
+        (z.close_pos>=.65) & (z.upper_wick<=.35)
+    ).fillna(False).to_numpy()
+    event_idx=np.flatnonzero(strong_mask)
+    event_idx=event_idx[(event_idx>=start_i)&(event_idx<len(z)-62)]
+    for i in event_idx:
         r=z.iloc[i]
-        strong=(r.ret1>=.05 and r.body>=.035 and r.vr>=2 and r.amt20>=5_000_000_000 and
-                r.close_pos>=.65 and r.upper_wick<=.35)
-        if not strong:continue
         if i-cooldown["E0_EVENT"]>=40:
             add_event(rows,z,"E0_EVENT",i,i,cost); cooldown["E0_EVENT"]=i
 
