@@ -56,6 +56,55 @@ def split(d):
     y=pd.Timestamp(d).year
     return "TRAIN" if y<=2021 else "VALID" if y<=2024 else "TEST"
 
+
+def simulate_path(z,entry_i,entry,stop,target,horizon,cost):
+    """Conservative daily-bar simulation: if stop and target touch same day, stop wins."""
+    p=f"path{horizon}_"
+    out={
+        p+"valid":False,p+"full_horizon":False,p+"outcome":"INVALID",
+        p+"days":np.nan,p+"net_return":np.nan,p+"r_multiple":np.nan,
+        p+"mfe":np.nan,p+"mae":np.nan,
+    }
+    if not all(math.isfinite(v) for v in [entry,stop,target]) or not(stop<entry<target):
+        return out
+    end_i=entry_i+horizon
+    full=end_i<len(z)
+    last_i=min(end_i,len(z)-1)
+    if last_i<entry_i:return out
+    path=z.iloc[entry_i:last_i+1]
+    out[p+"valid"]=True
+    out[p+"full_horizon"]=full
+    out[p+"mfe"]=float(path["ah"].max()/entry-1)
+    out[p+"mae"]=float(path["al"].min()/entry-1)
+    outcome="TIMEOUT" if full else "OPEN_INCOMPLETE"
+    exit_price=float(z.at[last_i,"ac"])
+    days=int(last_i-entry_i)
+    for j in range(entry_i,last_i+1):
+        stop_hit=bool(float(z.at[j,"al"])<=stop)
+        target_hit=bool(float(z.at[j,"ah"])>=target)
+        if stop_hit and target_hit:
+            outcome="STOP_SAME_DAY"
+            exit_price=stop
+            days=int(j-entry_i)
+            break
+        if stop_hit:
+            outcome="STOP"
+            exit_price=stop
+            days=int(j-entry_i)
+            break
+        if target_hit:
+            outcome="TARGET"
+            exit_price=target
+            days=int(j-entry_i)
+            break
+    net_ret=float(exit_price/entry-1-cost)
+    risk_pct=float((entry-stop)/entry)
+    out[p+"outcome"]=outcome
+    out[p+"days"]=days
+    out[p+"net_return"]=net_ret
+    out[p+"r_multiple"]=float(net_ret/risk_pct) if risk_pct>0 else np.nan
+    return out
+
 def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
     entry_i=signal_i+1
     if entry_i>=len(z):return
@@ -75,6 +124,11 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
          "signal_headroom448":float(z.at[signal_i,"ema448"]/z.at[signal_i,"ac"]-1) if pd.notna(z.at[signal_i,"ema448"]) and z.at[signal_i,"ac"]>0 else np.nan}
     if context:
         rec.update(context)
+    if kind=="E3_CLASSIC_PULLBACK" and context:
+        stop=float(context.get("anchor_price_adj",np.nan))
+        target=float(context.get("target448_signal",np.nan))
+        rec.update(simulate_path(z,entry_i,entry,stop,target,20,cost))
+        rec.update(simulate_path(z,entry_i,entry,stop,target,60,cost))
     for h in (20,60):
         j=entry_i+h
         if j<len(z):
@@ -152,6 +206,8 @@ def scan_one(g,start,cost):
                 "pull_gap112_224":float(abs(z.at[pull_i,"ema224"]-z.at[pull_i,"ema112"])/z.at[pull_i,"ema224"]) if z.at[pull_i,"ema224"]>0 else np.nan,
                 "pull_ema224_slope20":float(z.at[pull_i,"ema224_slope20"]) if pd.notna(z.at[pull_i,"ema224_slope20"]) else np.nan,
                 "pull_ema112_slope20":float(z.at[pull_i,"ema112_slope20"]) if pd.notna(z.at[pull_i,"ema112_slope20"]) else np.nan,
+                "anchor_price_adj":anchor,
+                "target448_signal":float(z.at[pull_i,"ema448"]) if pd.notna(z.at[pull_i,"ema448"]) else np.nan,
             })
             add_event(rows,z,"E3_CLASSIC_PULLBACK",pull_i,i,cost,context=pull_ctx); cooldown["E3_CLASSIC_PULLBACK"]=pull_i
     return rows
@@ -347,6 +403,42 @@ def summarize_regime_dynamics(ev):
             out.append(rec)
     return pd.DataFrame(out)
 
+
+def summarize_trade_path(ev):
+    """Evaluate the actual structural plan: anchor-open invalidation vs signal-day EMA448 target."""
+    if ev.empty:return pd.DataFrame()
+    x=ev[ev["kind"]=="E3_CLASSIC_PULLBACK"].copy()
+    if x.empty:return pd.DataFrame()
+    x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
+    out=[]
+    for view,keys in [("SPLIT",["split"]),("YEAR",["year"]),("SPLIT_EXCHANGE",["split","exchange"])]:
+        for vals,q in x.groupby(keys,dropna=False):
+            if not isinstance(vals,tuple):vals=(vals,)
+            base={"view":view}
+            for k,v in zip(keys,vals):base[k]=v
+            for h in (20,60):
+                full=q[(q[f"path{h}_valid"]==True)&(q[f"path{h}_full_horizon"]==True)].copy()
+                rec=dict(base); rec["horizon"]=h; rec["n"]=len(full)
+                if len(full):
+                    outcome=full[f"path{h}_outcome"].astype(str)
+                    ret=full[f"path{h}_net_return"].astype(float)
+                    rm=full[f"path{h}_r_multiple"].astype(float)
+                    rec["target_rate"]=(outcome=="TARGET").mean()
+                    rec["stop_rate"]=outcome.isin(["STOP","STOP_SAME_DAY"]).mean()
+                    rec["timeout_rate"]=(outcome=="TIMEOUT").mean()
+                    rec["mean_return"]=ret.mean()
+                    rec["median_return"]=ret.median()
+                    rec["win_rate"]=(ret>0).mean()
+                    rec["mean_r"]=rm.mean()
+                    rec["median_r"]=rm.median()
+                    rec["mean_mfe"]=full[f"path{h}_mfe"].mean()
+                    rec["mean_mae"]=full[f"path{h}_mae"].mean()
+                else:
+                    for k in ["target_rate","stop_rate","timeout_rate","mean_return","median_return","win_rate","mean_r","median_r","mean_mfe","mean_mae"]:
+                        rec[k]=np.nan
+                out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -390,6 +482,8 @@ def main():
     st.to_csv(a.out/"event_first_structure.csv",index=False,encoding="utf-8-sig")
     rg=summarize_regime_dynamics(ev)
     rg.to_csv(a.out/"event_first_regime_dynamics.csv",index=False,encoding="utf-8-sig")
+    tp=summarize_trade_path(ev)
+    tp.to_csv(a.out/"event_first_trade_path.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -420,5 +514,13 @@ def main():
         for c in ["mean20","median20","win20","mean60","median60","win60"]:
             if c in show:show[c]=(show[c]*100).round(2)
         print("\n=== E3 MARKET REGIME DYNAMICS (%) ===")
+        print(show.to_string(index=False))
+    if not tp.empty:
+        show=tp[tp["view"]=="SPLIT"].copy()
+        for c in ["target_rate","stop_rate","timeout_rate","mean_return","median_return","win_rate","mean_mfe","mean_mae"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        for c in ["mean_r","median_r"]:
+            if c in show:show[c]=show[c].round(2)
+        print("\n=== E3 STRUCTURAL TRADE PATH: ANCHOR STOP VS EMA448 TARGET ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
