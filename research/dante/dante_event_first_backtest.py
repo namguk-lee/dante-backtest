@@ -45,6 +45,8 @@ def feat(g):
     g["upper_wick"]=(g.ah-np.maximum(g.ao,g.ac))/rng
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["below80"]=(g.ac<g.ema224).shift(1).rolling(80,min_periods=80).sum()
+    g["prior1_high"]=g.ah.shift(1)
+    g["prior3_high"]=g.ah.shift(1).rolling(3,min_periods=3).max()
     g["prior5_high"]=g.ah.shift(1).rolling(5,min_periods=5).max()
     g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
     g["event_breakout20"]=(g.ac>g.prior20_high)
@@ -168,7 +170,7 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
          "signal_headroom448":float(z.at[signal_i,"ema448"]/z.at[signal_i,"ac"]-1) if pd.notna(z.at[signal_i,"ema448"]) and z.at[signal_i,"ac"]>0 else np.nan}
     if context:
         rec.update(context)
-    if kind in ("E3_CLASSIC_PULLBACK","E4_REACCELERATION") and context:
+    if (kind=="E3_CLASSIC_PULLBACK" or kind.startswith("E4_REACCEL")) and context:
         stop=float(context.get("anchor_price_adj",np.nan))
         target=float(context.get("target448_signal",np.nan))
         ema224_signal=float(z.at[signal_i,"ema224"]) if pd.notna(z.at[signal_i,"ema224"]) else np.nan
@@ -191,7 +193,8 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
 
 def scan_one(g,start,cost):
     z=feat(g)
-    rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999,"E4_REACCELERATION":-999}
+    rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999,
+                      "E4_REACCEL_1D":-999,"E4_REACCEL_3D":-999,"E4_REACCEL_5D":-999}
     start_i=max(500,int(z.index[z.date>=start][0]) if (z.date>=start).any() else len(z))
     strong_mask=(
         (z.ret1>=.05) & (z.body>=.035) & (z.vr>=2) & (z.amt20>=5_000_000_000)
@@ -265,31 +268,39 @@ def scan_one(g,start,cost):
                 add_event(rows,z,"E3_CLASSIC_PULLBACK",pull_i,i,cost,context=pull_ctx)
                 cooldown["E3_CLASSIC_PULLBACK"]=pull_i
 
-            # Stage 4: transparent re-acceleration confirmation after the pullback.
-            # Generic price/EMA confirmation only; no proprietary Dante indicator is inferred.
-            reaccel_i=None
-            for j in range(pull_i+1,min(pull_i+11,len(z)-1)):
-                if float(z.at[j,"ac"])<anchor:break
-                if any(pd.isna(z.at[j,k]) for k in ["ema5","ema15","ema224","prior5_high"]):continue
-                above224=bool(z.at[j,"ac"]>=z.at[j,"ema224"])
-                reclaim5=bool(z.at[j,"ac"]>z.at[j,"prior5_high"])
-                short_bull=bool(z.at[j,"ema5"]>z.at[j,"ema15"])
-                if above224 and reclaim5 and short_bull:
-                    reaccel_i=j
-                    break
-            if reaccel_i is not None and reaccel_i-cooldown["E4_REACCELERATION"]>=40:
-                reaccel_ctx=dict(pull_ctx)
-                reaccel_ctx.update({
-                    "pull_to_reaccel_days":int(reaccel_i-pull_i),
-                    "event_to_reaccel_days":int(reaccel_i-i),
-                    "reaccel_volume_ratio":float(z.at[reaccel_i,"vr"]) if pd.notna(z.at[reaccel_i,"vr"]) else np.nan,
-                    "reaccel_dist224":float(z.at[reaccel_i,"ac"]/z.at[reaccel_i,"ema224"]-1) if z.at[reaccel_i,"ema224"]>0 else np.nan,
-                    "reaccel_ema5_15_gap":float(z.at[reaccel_i,"ema5"]/z.at[reaccel_i,"ema15"]-1) if z.at[reaccel_i,"ema15"]>0 else np.nan,
-                    "reaccel_headroom448":float(z.at[reaccel_i,"ema448"]/z.at[reaccel_i,"ac"]-1) if z.at[reaccel_i,"ac"]>0 else np.nan,
-                    "target448_signal":float(z.at[reaccel_i,"ema448"]) if pd.notna(z.at[reaccel_i,"ema448"]) else np.nan,
-                })
-                add_event(rows,z,"E4_REACCELERATION",reaccel_i,i,cost,context=reaccel_ctx)
-                cooldown["E4_REACCELERATION"]=reaccel_i
+            # Stage 4 variants: compare fast vs slow transparent re-acceleration confirmation.
+            # No proprietary indicator is inferred. 1D/3D/5D means close reclaims the
+            # prior 1/3/5-session high while above EMA224 with EMA5 > EMA15.
+            for kind,high_col in [
+                ("E4_REACCEL_1D","prior1_high"),
+                ("E4_REACCEL_3D","prior3_high"),
+                ("E4_REACCEL_5D","prior5_high"),
+            ]:
+                reaccel_i=None
+                for j in range(pull_i+1,min(pull_i+11,len(z)-1)):
+                    if float(z.at[j,"ac"])<anchor:break
+                    if any(pd.isna(z.at[j,k]) for k in ["ema5","ema15","ema224",high_col]):continue
+                    above224=bool(z.at[j,"ac"]>=z.at[j,"ema224"])
+                    reclaim=bool(z.at[j,"ac"]>z.at[j,high_col])
+                    short_bull=bool(z.at[j,"ema5"]>z.at[j,"ema15"])
+                    if above224 and reclaim and short_bull:
+                        reaccel_i=j
+                        break
+                if reaccel_i is not None and reaccel_i-cooldown[kind]>=40:
+                    reaccel_ctx=dict(pull_ctx)
+                    reaccel_ctx.update({
+                        "reaccel_variant":kind,
+                        "pull_to_reaccel_days":int(reaccel_i-pull_i),
+                        "event_to_reaccel_days":int(reaccel_i-i),
+                        "reaccel_breakout_level":float(z.at[reaccel_i,high_col]),
+                        "reaccel_volume_ratio":float(z.at[reaccel_i,"vr"]) if pd.notna(z.at[reaccel_i,"vr"]) else np.nan,
+                        "reaccel_dist224":float(z.at[reaccel_i,"ac"]/z.at[reaccel_i,"ema224"]-1) if z.at[reaccel_i,"ema224"]>0 else np.nan,
+                        "reaccel_ema5_15_gap":float(z.at[reaccel_i,"ema5"]/z.at[reaccel_i,"ema15"]-1) if z.at[reaccel_i,"ema15"]>0 else np.nan,
+                        "reaccel_headroom448":float(z.at[reaccel_i,"ema448"]/z.at[reaccel_i,"ac"]-1) if z.at[reaccel_i,"ac"]>0 else np.nan,
+                        "target448_signal":float(z.at[reaccel_i,"ema448"]) if pd.notna(z.at[reaccel_i,"ema448"]) else np.nan,
+                    })
+                    add_event(rows,z,kind,reaccel_i,i,cost,context=reaccel_ctx)
+                    cooldown[kind]=reaccel_i
     return rows
 
 def summarize(ev):
@@ -353,7 +364,7 @@ def summarize_robustness(ev):
     """Diagnose regime dependence and winner concentration for E2/E3."""
     out=[]
     if ev.empty:return pd.DataFrame()
-    x=ev[ev["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCELERATION"])].copy()
+    x=ev[ev["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"])].copy()
     x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
     groups=[
         ("SPLIT",["split","kind"]),
@@ -421,8 +432,8 @@ def summarize_structure(ev):
     ]
     out=[]
     for view,col in dimensions:
-        for (sp,bucket),q in x.groupby(["split",col],dropna=False,observed=True):
-            rec={"view":view,"bucket":bucket,"split":sp,"n":len(q)}
+        for (sp,kind,bucket),q in x.groupby(["split","kind",col],dropna=False,observed=True):
+            rec={"view":view,"bucket":bucket,"split":sp,"kind":kind,"n":len(q)}
             for h in (20,60):
                 s=q[f"ret{h}"].dropna()
                 rec[f"n{h}"]=len(s)
@@ -487,7 +498,7 @@ def summarize_regime_dynamics(ev):
 def summarize_trade_path(ev):
     """Evaluate the actual structural plan: anchor-open invalidation vs signal-day EMA448 target."""
     if ev.empty:return pd.DataFrame()
-    x=ev[ev["kind"].isin(["E3_CLASSIC_PULLBACK","E4_REACCELERATION"])].copy()
+    x=ev[(ev["kind"]=="E3_CLASSIC_PULLBACK") | (ev["kind"].astype(str).str.startswith("E4_REACCEL"))].copy()
     if x.empty:return pd.DataFrame()
     x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
     out=[]
@@ -524,7 +535,7 @@ def summarize_trade_path(ev):
 def summarize_e4_confirmation(ev):
     """Describe E4 confirmation quality without promoting any bucket to a trading rule."""
     if ev.empty:return pd.DataFrame()
-    x=ev[ev["kind"]=="E4_REACCELERATION"].copy()
+    x=ev[ev["kind"].astype(str).str.startswith("E4_REACCEL")].copy()
     if x.empty:return pd.DataFrame()
     x["reaccel_volume_bin"]=pd.cut(
         x["reaccel_volume_ratio"],[-np.inf,.8,1.2,2.0,np.inf],
@@ -634,7 +645,7 @@ def main():
             if c in show:show[c]=(show[c]*100).round(2)
         print(show.to_string(index=False))
     if not yr.empty:
-        focus=yr[(yr["view"]=="YEAR_ALL") & (yr["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCELERATION"]))].copy()
+        focus=yr[(yr["view"]=="YEAR_ALL") & (yr["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"]))].copy()
         for c in ["mean20","median20","win20","mean60","median60","win60"]:
             if c in focus:focus[c]=(focus[c]*100).round(2)
         print("\n=== E2/E3/E4 YEARLY DIAGNOSTIC (%) ===")
