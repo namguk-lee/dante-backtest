@@ -278,6 +278,7 @@ def scan(z,min_turnover):
     }
     context_flags={
         "public_reverse112_context":sig_reverse112,
+        "public_224_4month_near10_context":public_224_4month_near10,
     }
     proxy_flags={
         "research_share_1to1_proxy":sig_share,
@@ -299,7 +300,8 @@ def scan(z,min_turnover):
     support_count=int(sig_accum_cool)
     broad_context_count=int(conc)+int(sig_blue)
     total=technique_count+proxy_count+support_count
-    if total<1:return None
+    # Keep direct public search-context matches even when no other detector fires.
+    if total<1 and context_count<1:return None
 
     all_flags={**technique_flags,**context_flags,**proxy_flags,**support_flags}
     labels=[k.replace("public_","").replace("research_","").replace("_proxy","") for k,v in all_flags.items() if v and k!="research_blue_dot_bb35_recent5"]
