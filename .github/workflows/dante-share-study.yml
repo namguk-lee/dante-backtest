@@ -55,7 +55,7 @@ jobs:
             dante_share_study/charts/
 
       - name: Run matched-market proxy control study
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[control]')
         run: >-
           python research/dante/dante_share_proxy_control_study.py
           --ko krx_share/ko_eod.parquet
