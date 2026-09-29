@@ -9,13 +9,19 @@ breakout/support ("concrete"), 112 recovery, and structural targets.
 Private/proprietary Dante indicators are intentionally not reproduced.
 """
 from __future__ import annotations
-import argparse
+import argparse, random, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
+import FinanceDataReader as fdr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+KST=ZoneInfo("Asia/Seoul")
 
 
 def parse_args():
@@ -25,6 +31,8 @@ def parse_args():
     p.add_argument("--out",type=Path,default=Path("dante_classic_results"))
     p.add_argument("--max-charts",type=int,default=8)
     p.add_argument("--min-turnover",type=float,default=5_000_000_000)
+    p.add_argument("--workers",type=int,default=8)
+    p.add_argument("--retries",type=int,default=3)
     return p.parse_args()
 
 
@@ -80,77 +88,98 @@ def local_swing_highs(z,start,end,wing=3):
 
 
 def find_bowl(z):
+    """Approximate decline -> stabilization/base -> EMA224 approach.
+
+    The public rule says Bowl-2 is a long sideways/base period and should be
+    longer than Bowl-1. The absolute lowest low can occur late inside a base
+    (shakeout), so Bowl-2 must not start mechanically at the absolute minimum.
+    """
     n=len(z)
     if n<520:return None
     approach_candidates=[]
     for i in range(max(448,n-60),n):
         if pd.isna(z.at[i,"ema224"]):continue
         d=float(z.at[i,"ac"]/z.at[i,"ema224"]-1)
-        if -.10<=d<=.10:
-            approach_candidates.append(i)
+        if -.10<=d<=.10:approach_candidates.append(i)
     if not approach_candidates:return None
     approach_i=approach_candidates[0]
     below_days=consecutive_below_before(z,approach_i,"ema224")
     left=max(448,approach_i-260)
     if approach_i-left<80:return None
-    b_end=max(left+30,approach_i-15)
-    if b_end<=left:return None
-    bottom_i=int(z.loc[left:b_end,"ac"].idxmin())
-    p_start=max(448,bottom_i-140)
-    p_end=bottom_i-10
-    if p_end<=p_start:return None
-    peak_i=int(z.loc[p_start:p_end,"ah"].idxmax())
-    if peak_i>=bottom_i:return None
 
-    decline_days=bottom_i-peak_i
-    base_days=approach_i-bottom_i
-    peak=float(z.at[peak_i,"ah"]); bottom=float(z.at[bottom_i,"al"])
-    decline_pct=bottom/peak-1 if peak>0 else np.nan
-    base=z.iloc[bottom_i:approach_i+1]
+    # Large pre-base peak.
+    peak_end=approach_i-35
+    if peak_end<=left:return None
+    peak_i=int(z.loc[left:peak_end,"ah"].idxmax())
+    peak=float(z.at[peak_i,"ah"])
+    if peak<=0:return None
+
+    # First area where the fast fall has materially slowed. Thresholds are
+    # transparent research proxies, not claimed Dante proprietary constants.
+    base_start_i=None
+    for j in range(peak_i+10,max(peak_i+11,approach_i-19)):
+        if j+15>=approach_i:break
+        px=float(z.at[j,"ac"])
+        if px/peak-1>-.15:continue
+        fwd=z.iloc[j:min(j+21,approach_i+1)]
+        if len(fwd)<15:continue
+        low=float(fwd.al.min()); high=float(fwd.ah.max())
+        if low>=px*.82 and high<=px*1.35:
+            base_start_i=j
+            break
+    if base_start_i is None:
+        b_end=max(left+30,approach_i-15)
+        if b_end<=left:return None
+        base_start_i=int(z.loc[left:b_end,"ac"].idxmin())
+
+    bottom_i=int(z.loc[base_start_i:approach_i,"al"].idxmin())
+    decline_days=base_start_i-peak_i
+    base_days=approach_i-base_start_i
+    if decline_days<=0 or base_days<=0:return None
+    decline_low=float(z.loc[peak_i:base_start_i,"al"].min())
+    decline_pct=decline_low/peak-1
+    base=z.iloc[base_start_i:approach_i+1]
     q10=float(base.ac.quantile(.10)); q90=float(base.ac.quantile(.90))
     base_range=(q90/q10-1) if q10>0 else np.nan
     base_slope=float(base.ac.iloc[-1]/base.ac.iloc[0]-1) if len(base)>1 else np.nan
     return {
-        "approach_i":approach_i,"peak_i":peak_i,"bottom_i":bottom_i,
+        "approach_i":approach_i,"peak_i":peak_i,"base_start_i":base_start_i,"bottom_i":bottom_i,
         "below224_days_before_approach":below_days,
         "bowl1_days":decline_days,"bowl2_days":base_days,
-        "bowl2_over_bowl1":base_days/decline_days if decline_days>0 else np.nan,
+        "bowl2_over_bowl1":base_days/decline_days,
         "bowl1_decline_pct":decline_pct,
         "bowl2_range_pct":base_range,
         "bowl2_net_change_pct":base_slope,
     }
 
-
 def find_anchor(z,bowl,min_turnover):
-    bottom_i=bowl["bottom_i"]; approach_i=bowl["approach_i"]
-    start=min(approach_i,max(bottom_i+10,approach_i-80))
-    end=min(len(z)-1,approach_i+20)
+    base_start_i=bowl.get("base_start_i",bowl["bottom_i"]); approach_i=bowl["approach_i"]
+    start=min(approach_i,max(base_start_i+10,approach_i-90))
+    end=min(len(z)-1,approach_i+25)
     cand=[]
     for i in range(start,end+1):
         if any(pd.isna(z.at[i,c]) for c in ["vr","body","close_pos","amt20","ema112"]):continue
         if float(z.at[i,"amt20"])<min_turnover:continue
-        if float(z.at[i,"body"])<.035 or float(z.at[i,"vr"])<1.8 or float(z.at[i,"close_pos"])<.60:
-            continue
+        if float(z.at[i,"body"])<.035 or float(z.at[i,"vr"])<1.8 or float(z.at[i,"close_pos"])<.60:continue
         crossed112=bool(z.at[i,"cross112"]) or float(z.at[i,"ac"])>float(z.at[i,"ema112"])
         broke20=bool(pd.notna(z.at[i,"prior20_high"]) and z.at[i,"ac"]>z.at[i,"prior20_high"])
         if not(crossed112 or broke20):continue
-        strength=float(z.at[i,"body"])*min(float(z.at[i,"vr"]),8)*(1.15 if broke20 else 1)
-        cand.append((strength,i,broke20))
+        anchor_open=float(z.at[i,"ao"])
+        post=z.iloc[i:]
+        closes_below=int((post.ac<anchor_open).sum())
+        alive=bool(closes_below==0 and float(z.iloc[-1].ac)>=anchor_open)
+        cand.append((i,alive,broke20,closes_below))
     if not cand:return None
-    _,i,broke20=max(cand)
-    anchor_open=float(z.at[i,"ao"])
-    post=z.iloc[i:]
-    closes_below=int((post.ac<anchor_open).sum())
+    # Public anchor logic treats a broken anchor as failed and waits for a new
+    # anchor. Prefer the most recent still-alive anchor; otherwise the latest.
+    alive=[x for x in cand if x[1]]
+    i,alive_flag,broke20,closes_below=(alive[-1] if alive else cand[-1])
     return {
-        "anchor_i":i,"anchor_open_adj":anchor_open,
-        "anchor_ret_pct":float(z.at[i,"ret1"]),
-        "anchor_body_pct":float(z.at[i,"body"]),
-        "anchor_volume_ratio":float(z.at[i,"vr"]),
-        "anchor_broke20":bool(broke20),
-        "anchor_closes_below":closes_below,
-        "anchor_alive_strict":bool(closes_below==0 and float(z.iloc[-1].ac)>=anchor_open),
+        "anchor_i":i,"anchor_open_adj":float(z.at[i,"ao"]),
+        "anchor_ret_pct":float(z.at[i,"ret1"]),"anchor_body_pct":float(z.at[i,"body"]),
+        "anchor_volume_ratio":float(z.at[i,"vr"]),"anchor_broke20":bool(broke20),
+        "anchor_closes_below":int(closes_below),"anchor_alive_strict":bool(alive_flag),
     }
-
 
 def find_concrete(z,anchor_i):
     swings=local_swing_highs(z,max(448,anchor_i-120),anchor_i-3,wing=3)
@@ -280,6 +309,46 @@ def classify_one(g,min_turnover):
     return rec,z
 
 
+
+def fetch_recent(rec,start,end,retries):
+    last=None
+    for k in range(retries):
+        try:
+            q=fdr.DataReader("NAVER:"+rec["code"],start.strftime("%Y-%m-%d"),(end+pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+            if q is None or q.empty:return rec["series_id"],pd.DataFrame(),"empty"
+            q=q.reset_index(); q.columns=[str(x).lower() for x in q.columns]
+            need=["date","open","high","low","close","volume"]
+            if any(x not in q.columns for x in need):raise ValueError(f"columns={list(q.columns)}")
+            q["date"]=pd.to_datetime(q.date,errors="coerce")
+            for x in need[1:]+(["change"] if "change" in q.columns else []):q[x]=pd.to_numeric(q[x],errors="coerce")
+            q=q.dropna(subset=need); q=q[(q.date>=start)&(q.date<=end)]
+            q["amount"]=q.close*q.volume
+            return rec["series_id"],q.sort_values("date"),None
+        except Exception as exc:
+            last=repr(exc); time.sleep((k+1)*.7+random.random()*.25)
+    return rec["series_id"],pd.DataFrame(),last
+
+
+def stitch_one(hist,q):
+    if q.empty:return hist
+    q=q.sort_values("date").drop_duplicates("date",keep="last").copy()
+    qstart=pd.Timestamp(q.date.min())
+    older=hist[hist.date<qstart].sort_values("date").copy()
+    if older.empty:return hist
+    prev=older.iloc[-1]; raw=float(prev.close); adj=float(prev.adjusted_close); rows=[]
+    for rec in q.to_dict("records"):
+        rr=float(rec["close"]/raw-1) if raw>0 else 0.0
+        ch=rec.get("change",np.nan)
+        eff=float(ch) if pd.notna(ch) and abs(float(ch))<1 and abs(rr-float(ch))>.03 else rr
+        eff=float(np.clip(eff,-.95,5)); adj=adj*(1+eff)
+        rows.append({
+            "series_id":prev.series_id,"code":prev.code,"exchange":prev.exchange,"name":prev.get("name",""),
+            "date":rec["date"],"open":rec["open"],"high":rec["high"],"low":rec["low"],"close":rec["close"],
+            "adjusted_close":adj,"volume":rec["volume"],"amount":rec["amount"]
+        })
+        raw=float(rec["close"])
+    return pd.concat([older,pd.DataFrame(rows)],ignore_index=True,sort=False).sort_values("date").drop_duplicates("date",keep="last")
+
 def render_chart(z,rec,out_dir,bars=280):
     end=len(z); start=max(0,end-bars)
     t=z.iloc[start:].copy().reset_index().rename(columns={"index":"orig_i"})
@@ -334,27 +403,55 @@ def render_chart(z,rec,out_dir,bars=280):
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
-    latest=panel.date.max()
-    active=set(panel.loc[panel.date.eq(latest),"series_id"].astype(str))
-    rows=[]; chart_inputs=[]
-    total=len(active)
+    base_date=pd.Timestamp(panel.date.max()).normalize()
+    active=set(panel.loc[panel.date.eq(base_date),"series_id"].astype(str))
+
+    # Coarse structural screen on the local full-market panel.
+    coarse=[]; total=len(active)
     for n,(sid,g) in enumerate(panel[panel.series_id.astype(str).isin(active)].groupby("series_id",sort=False),1):
         if len(g)<520:continue
         rec,z=classify_one(g,a.min_turnover)
-        if rec:
-            rows.append(rec); chart_inputs.append((rec,z))
-        if n%250==0 or n==total:
-            print(f"series {n}/{total} candidates={len(rows)}",flush=True)
+        if rec:coarse.append(rec)
+        if n%250==0 or n==total:print(f"coarse {n}/{total} candidates={len(coarse)}",flush=True)
 
-    if not rows:
+    # The marcap dataset can lag the current session. Refresh only the slow-moving
+    # structural candidates from NAVER; this keeps the full-market step practical.
+    now=datetime.now(KST)
+    closed_day=now.date() if now.time()>=dtime(16,10) else now.date()-timedelta(days=1)
+    target=pd.Timestamp(closed_day).normalize()
+    final_rows=[]; chart_inputs=[]
+    if coarse and target>base_date:
+        start=base_date-pd.Timedelta(days=140)
+        with ThreadPoolExecutor(max_workers=a.workers) as pool:
+            futs=[pool.submit(fetch_recent,r,start,target,a.retries) for r in coarse]
+            fetched=[]
+            for i,fut in enumerate(as_completed(futs),1):
+                fetched.append(fut.result())
+                if i%50==0 or i==len(futs):print(f"refresh {i}/{len(futs)}",flush=True)
+        res={sid:(q,err) for sid,q,err in fetched}
+        for old in coarse:
+            hist=panel[panel.series_id.eq(old["series_id"])].sort_values("date").copy()
+            q,err=res.get(old["series_id"],(pd.DataFrame(),"missing"))
+            z=feat(stitch_one(hist,q))
+            rec,_=classify_one(stitch_one(hist,q),a.min_turnover)
+            if rec:
+                rec["refresh_error"]=err
+                final_rows.append(rec); chart_inputs.append((rec,z))
+    else:
+        for old in coarse:
+            hist=panel[panel.series_id.eq(old["series_id"])].sort_values("date").copy()
+            rec,z=classify_one(hist,a.min_turnover)
+            if rec:final_rows.append(rec); chart_inputs.append((rec,z))
+
+    if not final_rows:
         pd.DataFrame().to_csv(a.out/"dante_classic_candidates.csv",index=False,encoding="utf-8-sig")
         return
-    out=pd.DataFrame(rows)
+    out=pd.DataFrame(final_rows)
     order={"A":0,"B":1,"NEAR":2}
     out["_tier_order"]=out.tier.map(order).fillna(9)
     out=out.sort_values(["_tier_order","score"],ascending=[True,False]).drop(columns=["_tier_order"]).reset_index(drop=True)
     out["rank"]=np.arange(1,len(out)+1)
-    csv_cols=[c for c in out.columns if not c.startswith("_idx_")]
+    csv_cols=[x for x in out.columns if not x.startswith("_idx_")]
     out[csv_cols].to_csv(a.out/"dante_classic_candidates.csv",index=False,encoding="utf-8-sig")
 
     selected=out.head(a.max_charts)
@@ -369,7 +466,6 @@ def main():
               "anchor_date","anchor_volume_ratio","anchor_closes_below","concrete_hold_strict",
               "dist224_pct","ema112_slope20_pct","target_type","target_price","target_upside_pct"]
     print(out[showcols].head(30).to_string(index=False))
-
 
 if __name__=="__main__":
     main()
