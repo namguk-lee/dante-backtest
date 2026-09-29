@@ -24,7 +24,6 @@ import math
 import numpy as np
 import pandas as pd
 import FinanceDataReader as fdr
-import FinanceDataReader as fdr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -297,6 +296,7 @@ def geometry(z,cross_i,ma_n):
         "ratio_cross_ma_current":safe_ratio(ma_cross_up_current,ma_cross_down),
     }
     out.update(broad)
+    out.update(latest_local_trough_features(z,cross_i))
     out.update(window_share_features(z))
     out.update(cycle_features(z,cross_i,ma_n))
     return out
