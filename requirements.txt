@@ -1,0 +1,4 @@
+finance-datareader>=0.9.96
+numpy>=2.0,<3
+pandas>=2.2,<3
+pyarrow>=17,<24
