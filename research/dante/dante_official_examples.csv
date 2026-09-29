@@ -1,0 +1,23 @@
+analysis_date,stock,techniques,vip_indicators,context_tags,outcome,max_return_pct,stop_hit,source_url
+2025-01-20,티피씨글로벌,"중파동 추세전환-눌림","색변환 파란점선;수박지표;레인보우","224안착;이평수렴;공구리;대파동저점",success,70.9,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260129172322861yc
+2025-06-17,메쎄이상,"역매공파;지분기법","가격이동평균;수박지표;파란점선","224기준1대1;224안착;공구리;매집봉",success,62,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/250905133030841pp
+2025-06-30,이연제약,"역매공파;영차기법","분홍색화살표;수박지표;색변환 파란점선","112안착;기준봉;공구리;기준봉눌림",stop,-5,true,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/250902164248381yh
+2025-07-31,RF머트리얼즈,"역매공파;삼각수렴","수박지표;초록색화살표;색변환 파란점선","112안착;기준봉;공구리;수박연속",success,107,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/250916172551785bp
+2025-08-04,네패스아크,"밥그릇;기준봉매매;역매공파","수박지표;파란점선","224부근안착;공구리;기준봉;눌림",success,34,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251001163002355sr
+2025-08-04,덕산하이메탈,"밥그릇;기준봉매매","수박지표;가격이동평균;파란점선","횡보;기준봉;거래량감소눌림;112손절참조",success,77,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251002161729128jt
+2025-08-08,비씨엔씨,"지분기법;역매공파","색변환 파란점선;수박지표;초록색화살표","112기준1대1;112안착;매집봉;공구리",success,53,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251002164439202kg
+2025-08-11,TP,"밥그릇","수박지표;색변환 파란점선;레인보우","224안착;공구리;수박재출현;전고점갭목표",success,50,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/250926142559776wn
+2025-08-25,동아엘텍,"역매공파","색변환 파란점선;수박지표","112안착;매집봉;공구리;박스저점",success,28,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251014165118313vd
+2025-09-08,벨로크,"역매공파;역헤드앤숄더","색변환 파란점선;역매공파화살표;수박지표","역배열;쓰리바닥;공구리;112손절참조",success,72,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251210171513294nm
+2025-10-13,에브리봇,"밥그릇;엘리어트파동","파란점선;수박지표","112_224_448수렴;이평위안착;장기횡보;눌림",success,56,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260213163747833yn
+2025-11-03,공구우먼,"삼각수렴;밥그릇","수박지표;가격이동평균;구름대","작은밥그릇;2번끝;삼각수렴돌파;224하방여지",success,29.6,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251112164213072mf
+2025-11-17,파트론,"중파동 추세전환;지분기법","색변환 파란점선;레인보우;볼린저밴드","112기준1대1;224안착;대중파동저점",mixed,6.3,true,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251231160123145mc
+2025-12-02,자이에스앤디,"쌍바닥;각도/파동","수박지표;레인보우브릿지;색변환 파란점선","대중파동저점;쌍바닥;강한장대양봉;횡보조정",success,28.3,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260114164044466sv
+2025-12-09,성신양회,"밥그릇;중파동 추세돌파-눌림","밥그릇매매기법;레인보우지표","밥그릇1_2;큰매집봉;강한공구리;기준봉시가손절",success,64.2,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260416172737910pf
+2025-12-19,켄코아에어로스페이스,"중파동 추세전환;작은밥그릇","수박지표;분홍색화살표;레인보우브릿지","15pct장대양봉;224안착기대;차눌림;기준봉시가손절",success,64,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/251224171214006lz
+2026-01-23,APS,"중파동 추세돌파-눌림","수박지표;색변환 파란점선;거래량","중파동전환;저거래량음봉눌림;공구리;기간대칭잔여",success,141,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260401164539883kw
+2026-02-04,머큐리,"중파동 추세돌파","색변환 파란점선;수박지표;레인보우브릿지","대중파동저점;매집봉;112_224손절참조",mixed,,true,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260318173247578mv
+2026-02-10,아스플로,"중파동 추세전환","수박지표;파란점선;레인보우지표","장기하락바닥;중파동돌파;매집;112손절참조",success,50,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260220172122886hw
+2026-03-09,STX그린로지스,"역매공파","수박지표;파란점선","역배열;중파동전환;공구리;112안착;매집봉",stop,-10,true,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260508173158169ph
+2026-03-30,아이티엠반도체,"기준봉매매;역매공파","색변환 파란점선;수박지표","역배열;강한장대양봉;공구리;20_60안착후눌림",success,66,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260409171022476in
+2026-04-20,한국선재,"기준봉매매;밥그릇2번 매집 심화","색변환 파란점선;일목균형지표;수박지표","대중파동저점;공격형매집;중파동전환눌림;기준봉",success,31.6,false,https://contents.premium.naver.com/jusikdante/jusikdante1/contents/260515165352528il
