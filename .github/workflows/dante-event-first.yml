@@ -36,7 +36,6 @@ jobs:
         run: >-
           python research/dante/collect_marcap_full_market.py
           --start "2024-01-01"
-          --end "2026-09-29"
           --out krx_event
           --cache marcap_event_cache
           --refresh-end-year
