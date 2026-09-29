@@ -194,6 +194,7 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
 def scan_one(g,start,cost):
     z=feat(g)
     rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999,
+                      "E4_REACCEL_UP":-999,"E4_REACCEL_BULL":-999,
                       "E4_REACCEL_1D":-999,"E4_REACCEL_3D":-999,"E4_REACCEL_5D":-999}
     start_i=max(500,int(z.index[z.date>=start][0]) if (z.date>=start).any() else len(z))
     strong_mask=(
@@ -271,20 +272,35 @@ def scan_one(g,start,cost):
             # Stage 4 variants: compare fast vs slow transparent re-acceleration confirmation.
             # No proprietary indicator is inferred. 1D/3D/5D means close reclaims the
             # prior 1/3/5-session high while above EMA224 with EMA5 > EMA15.
-            for kind,high_col in [
+            variants=[
+                ("E4_REACCEL_UP","up_close"),
+                ("E4_REACCEL_BULL","bull_up"),
                 ("E4_REACCEL_1D","prior1_high"),
                 ("E4_REACCEL_3D","prior3_high"),
                 ("E4_REACCEL_5D","prior5_high"),
-            ]:
+            ]
+            for kind,rule in variants:
                 reaccel_i=None
+                breakout_level=np.nan
                 for j in range(pull_i+1,min(pull_i+11,len(z)-1)):
                     if float(z.at[j,"ac"])<anchor:break
-                    if any(pd.isna(z.at[j,k]) for k in ["ema5","ema15","ema224",high_col]):continue
+                    if any(pd.isna(z.at[j,k]) for k in ["ema5","ema15","ema224"]):continue
                     above224=bool(z.at[j,"ac"]>=z.at[j,"ema224"])
-                    reclaim=bool(z.at[j,"ac"]>z.at[j,high_col])
                     short_bull=bool(z.at[j,"ema5"]>z.at[j,"ema15"])
-                    if above224 and reclaim and short_bull:
+                    if not(above224 and short_bull):continue
+                    if rule=="up_close":
+                        level=float(z.at[j-1,"ac"])
+                        confirm=bool(z.at[j,"ac"]>level)
+                    elif rule=="bull_up":
+                        level=float(z.at[j-1,"ac"])
+                        confirm=bool(z.at[j,"ac"]>level and z.at[j,"ac"]>z.at[j,"ao"])
+                    else:
+                        if pd.isna(z.at[j,rule]):continue
+                        level=float(z.at[j,rule])
+                        confirm=bool(z.at[j,"ac"]>level)
+                    if confirm:
                         reaccel_i=j
+                        breakout_level=level
                         break
                 if reaccel_i is not None and reaccel_i-cooldown[kind]>=40:
                     reaccel_ctx=dict(pull_ctx)
@@ -292,7 +308,7 @@ def scan_one(g,start,cost):
                         "reaccel_variant":kind,
                         "pull_to_reaccel_days":int(reaccel_i-pull_i),
                         "event_to_reaccel_days":int(reaccel_i-i),
-                        "reaccel_breakout_level":float(z.at[reaccel_i,high_col]),
+                        "reaccel_breakout_level":breakout_level,
                         "reaccel_volume_ratio":float(z.at[reaccel_i,"vr"]) if pd.notna(z.at[reaccel_i,"vr"]) else np.nan,
                         "reaccel_dist224":float(z.at[reaccel_i,"ac"]/z.at[reaccel_i,"ema224"]-1) if z.at[reaccel_i,"ema224"]>0 else np.nan,
                         "reaccel_ema5_15_gap":float(z.at[reaccel_i,"ema5"]/z.at[reaccel_i,"ema15"]-1) if z.at[reaccel_i,"ema15"]>0 else np.nan,
@@ -364,7 +380,7 @@ def summarize_robustness(ev):
     """Diagnose regime dependence and winner concentration for E2/E3."""
     out=[]
     if ev.empty:return pd.DataFrame()
-    x=ev[ev["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"])].copy()
+    x=ev[ev["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCEL_UP","E4_REACCEL_BULL","E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"])].copy()
     x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
     groups=[
         ("SPLIT",["split","kind"]),
@@ -645,7 +661,7 @@ def main():
             if c in show:show[c]=(show[c]*100).round(2)
         print(show.to_string(index=False))
     if not yr.empty:
-        focus=yr[(yr["view"]=="YEAR_ALL") & (yr["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"]))].copy()
+        focus=yr[(yr["view"]=="YEAR_ALL") & (yr["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCEL_UP","E4_REACCEL_BULL","E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"]))].copy()
         for c in ["mean20","median20","win20","mean60","median60","win60"]:
             if c in focus:focus[c]=(focus[c]*100).round(2)
         print("\n=== E2/E3/E4 YEARLY DIAGNOSTIC (%) ===")
