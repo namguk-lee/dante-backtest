@@ -317,3 +317,33 @@ Conclusion:
 2. Do **not** use the current mechanical translation as a standalone ranking/entry filter.
 3. The public concept may still be visually/manual and broader than this trough/peak proxy.
 4. Continue testing other explicitly public confirmations before changing the live recommendation rule, especially the 112/224 reverse-to-positive transition.
+
+
+## 17. Public 112/224 reverse-to-positive transition — historical result (2026-09-30)
+
+Official public material describes the EMA112/EMA224 change from reverse alignment to positive alignment as an “upward departure” signal. Two separate checks were performed.
+
+### A. Does it explain the existing early E3/E4 stage?
+
+Event-first Run #20, commit `8fc7d2db2beeba64c766a87cbcb457b944f5b301`:
+- all sampled E3/E4 signals in TRAIN / VALID / TEST still had EMA112 below EMA224.
+- therefore the public 112/224 transition is a **later stage**, not a valid filter to add to the existing early E3/E4 definition.
+
+### B. Is the 112/224 upward cross itself a standalone entry?
+
+Public-technique Run #12, commit `87d475e3ab4a1bcf8412dc289926420d4f64701a`.
+
+Base results, net of the existing 50bp cost assumption:
+
+| Split | Events | 5d mean / median | 20d mean / median | 60d mean / median |
+|---|---:|---:|---:|---:|
+| TRAIN 2021-2023 | 1,153 | -0.42% / -1.82% | -1.56% / -4.54% | -2.60% / -8.92% |
+| VALID 2024-2025 | 802 | -1.52% / -2.21% | -1.65% / -5.86% | -0.37% / -7.81% |
+| TEST 2026 | 256 | -0.43% / -2.95% | -2.46% / -8.27% | -14.61% / -21.42% |
+
+Conclusion:
+1. The 112/224 upward turn is public, meaningful **market structure context**.
+2. It is **not validated as a standalone buy entry** by this historical test.
+3. Do not merge it into early E3/E4 as a hard gate; doing so would remove that stage entirely.
+4. Keep the architecture parallel: early reverse-MA/event-first setups vs later 112/224 transition context.
+5. The remaining gap to the public Dante examples is likely in **confluence and entry timing**, not in any single MA-cross condition.
