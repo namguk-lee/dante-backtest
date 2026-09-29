@@ -206,6 +206,43 @@ def classify(z,event_date):
         "current_turnover20":float(cur.amount20) if pd.notna(cur.amount20) else np.nan
     }
 
+def diagnose_rejection(z,event_date):
+    z=z.sort_values("date").copy()
+    cur=z.iloc[-1]
+    evs=z[z.date.eq(pd.Timestamp(event_date))]
+    if evs.empty:
+        return {"reject_reason":"event_missing_after_refresh"}
+    e=evs.iloc[-1]; post=z[z.date>=e.date]
+    anchor=float(e.ao)
+    closes_below=int((post.ac<anchor).sum())
+    anchor_alive=bool(cur.ac>=anchor and closes_below<=1)
+    had_cross=bool(post.cross224.any())
+    above224=bool(cur.ac>=cur.ema224) if pd.notna(cur.ema224) else False
+    dist=float(cur.ac/cur.ema224-1) if pd.notna(cur.ema224) else np.nan
+    gap=float(abs(cur.ema224-cur.ema112)/cur.ema224) if pd.notna(cur.ema112) and pd.notna(cur.ema224) else np.nan
+    head=float(cur.ema448/cur.ac-1) if pd.notna(cur.ema448) else np.nan
+    factor=float(cur.ac/cur.close) if float(cur.close)>0 else 1.0
+    reasons=[]
+    if not anchor_alive:reasons.append("anchor_broken")
+    if not had_cross:reasons.append("no_224_cross_yet")
+    if above224 and head<.05:reasons.append("ema448_no_room")
+    if (not above224) and not(-.06<=dist<0):reasons.append("too_far_from_224")
+    if pd.notna(gap) and gap>.08:reasons.append("112_224_not_converged")
+    if not reasons:reasons.append("post_event_structure_incomplete")
+    return {
+        "reject_reason":"|".join(reasons),
+        "current_close":float(cur.close),
+        "ema112":float(cur.ema112/factor) if pd.notna(cur.ema112) else np.nan,
+        "ema224":float(cur.ema224/factor) if pd.notna(cur.ema224) else np.nan,
+        "ema448":float(cur.ema448/factor) if pd.notna(cur.ema448) else np.nan,
+        "dist224_pct":dist*100 if pd.notna(dist) else np.nan,
+        "gap112224_pct":gap*100 if pd.notna(gap) else np.nan,
+        "headroom448_pct":head*100 if pd.notna(head) else np.nan,
+        "anchor_alive":anchor_alive,
+        "had_224_cross":had_cross,
+        "closes_below_anchor":closes_below,
+    }
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     ko=load(a.ko,"KO"); kq=load(a.kq,"KQ"); panel=pd.concat([ko,kq],ignore_index=True)
@@ -226,14 +263,16 @@ def main():
             if i%50==0 or i==len(futs):print(f"refresh {i}/{len(futs)}",flush=True)
     res={sid:(q,err) for sid,q,err in results}
 
-    rows=[]
+    rows=[]; watch=[]
     for rec in stage1.to_dict("records"):
         hist=panel[panel.series_id.eq(rec["series_id"])].sort_values("date").copy()
         q,err=res.get(rec["series_id"],(pd.DataFrame(),"missing"))
         z=feat(stitch_one(hist,q))
         tail=z.tail(a.event_lookback)
         ev=tail[event_mask(tail,a)]
-        if ev.empty:continue
+        if ev.empty:
+            watch.append({**rec,"reject_reason":"no_strong_event_after_naver_refresh","refresh_error":err})
+            continue
         e=ev.iloc[-1]
         refreshed_rec={
             **rec,
@@ -252,8 +291,14 @@ def main():
             "recent_high_from_event":float(z.loc[e.name:,"ah"].max()) if e.name in z.index else float(e.ah),
         }
         cc=classify(z,e.date)
-        if not cc:continue
+        if not cc:
+            watch.append({**refreshed_rec,**diagnose_rejection(z,e.date),"refresh_error":err})
+            continue
         rows.append({**refreshed_rec,**cc,"refresh_error":err})
+    watch_df=pd.DataFrame(watch)
+    if not watch_df.empty:
+        watch_df=watch_df.sort_values(["event_date","event_volume_ratio"],ascending=[False,False])
+    watch_df.to_csv(a.out/"event_first_watch_rejections.csv",index=False,encoding="utf-8-sig")
     out=pd.DataFrame(rows)
     if not out.empty:
         out=out.sort_values(["score","event_date"],ascending=[False,False]).reset_index(drop=True)
