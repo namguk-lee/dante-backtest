@@ -49,7 +49,7 @@ def feat(g):
     g=g.sort_values("date").copy()
     f=(g.adjusted_close/g.close).replace([np.inf,-np.inf],np.nan).ffill().bfill().fillna(1)
     g["ao"]=g.open*f; g["ah"]=g.high*f; g["al"]=g.low*f; g["ac"]=g.adjusted_close
-    for n in (112,224,448):g[f"ema{n}"]=g.ac.ewm(span=n,adjust=False,min_periods=n).mean()
+    for n in (5,15,112,224,448):g[f"ema{n}"]=g.ac.ewm(span=n,adjust=False,min_periods=n).mean()
     g["vol20"]=g.volume.rolling(20,min_periods=20).mean()
     g["amount20"]=g.amount.rolling(20,min_periods=20).mean()
     g["vr"]=g.volume/g.vol20
@@ -58,6 +58,7 @@ def feat(g):
     rng=(g.ah-g.al).replace(0,np.nan)
     g["close_pos"]=(g.ac-g.al)/rng
     g["upper_wick"]=(g.ah-np.maximum(g.ao,g.ac))/rng
+    g["prior5_high"]=g.ah.shift(1).rolling(5,min_periods=5).max()
     g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["below80"]=(g.ac<g.ema224).shift(1).rolling(80,min_periods=80).sum()
@@ -158,8 +159,41 @@ def classify(z,event_date):
     vol_cool=bool(cur.volume<=e.volume*0.60) if e.volume>0 else False
     long_below=bool(e.below80>=60) if pd.notna(e.below80) else False
 
+    # Reconstruct the transparent E3 pullback, then ask whether the latest bar
+    # is a post-pullback re-acceleration confirmation (E4 research stage).
+    pullback_seen=False
+    pullback_date=pd.NaT
+    days_since_pull=np.nan
+    reaccel_confirmed=False
+    if had_224_cross:
+        p=post.reset_index(drop=True)
+        crosses=np.flatnonzero(p.cross224.fillna(False).to_numpy())
+        if len(crosses):
+            c0=int(crosses[0]); running_high=-np.inf; pull_local=None
+            for jj in range(c0+1,len(p)):
+                running_high=max(running_high,float(p.at[jj,"ah"]))
+                if float(p.at[jj,"ac"])<event_open_adj:break
+                if pd.isna(p.at[jj,"ema224"]) or p.at[jj,"ema224"]<=0:continue
+                d224=float(p.at[jj,"ac"]/p.at[jj,"ema224"]-1)
+                ddj=float(p.at[jj,"ac"]/running_high-1) if running_high>0 else 0
+                vcool=bool(float(p.at[jj,"volume"])<=float(e.volume)*.60) if e.volume>0 else False
+                if 0<=d224<=.08 and -.20<=ddj<=-.03 and vcool:
+                    pull_local=jj
+                    break
+            if pull_local is not None:
+                pullback_seen=True
+                pullback_date=p.at[pull_local,"date"]
+                days_since_pull=int(len(p)-1-pull_local)
+                reaccel_confirmed=bool(
+                    1<=days_since_pull<=10 and anchor_alive and currently_above224 and
+                    pd.notna(cur.prior5_high) and cur.ac>cur.prior5_high and
+                    pd.notna(cur.ema5) and pd.notna(cur.ema15) and cur.ema5>cur.ema15
+                )
+
     category=None
-    if anchor_alive and had_224_cross and currently_above224 and 0<=dist224<=.08 and -0.20<=drawdown<=-.03 and vol_cool:
+    if reaccel_confirmed:
+        category="REACCEL_CONFIRMED"
+    elif anchor_alive and had_224_cross and currently_above224 and 0<=dist224<=.08 and -0.20<=drawdown<=-.03 and vol_cool:
         category="DANTE_PULLBACK"
     elif anchor_alive and had_224_cross and currently_above224 and 0<=dist224<=.10:
         category="224_HOLD"
@@ -169,7 +203,7 @@ def classify(z,event_date):
         category="POST_EVENT_TREND"
     if category is None:return None
 
-    score={"DANTE_PULLBACK":40,"224_HOLD":32,"PRE224_ENERGY":25,"POST_EVENT_TREND":20}[category]
+    score={"REACCEL_CONFIRMED":46,"DANTE_PULLBACK":40,"224_HOLD":32,"PRE224_ENERGY":25,"POST_EVENT_TREND":20}[category]
     score+=10 if long_below else 0
     score+=10 if gap112224<=.05 else 5 if gap112224<=.08 else 0
     score+=10 if headroom>=.10 else 5 if headroom>=.05 else 0
@@ -188,7 +222,9 @@ def classify(z,event_date):
     long_below=bool(e.below80>=60) if pd.notna(e.below80) else False
     classic_tier=""
     if anchor_alive and long_below and age>=1:
-        if category=="DANTE_PULLBACK" and 3<=headroom*100<=30 and gap112224<=.08:
+        if category=="REACCEL_CONFIRMED" and 3<=headroom*100<=30 and gap112224<=.08:
+            classic_tier="A"
+        elif category=="DANTE_PULLBACK" and 3<=headroom*100<=30 and gap112224<=.08:
             classic_tier="A"
         elif category=="224_HOLD" and 5<=headroom*100<=30 and gap112224<=.08:
             classic_tier="B"
@@ -196,17 +232,25 @@ def classify(z,event_date):
             classic_tier="B"
     if not classic_tier:
         action_status="RESEARCH_ONLY"
+    elif category=="REACCEL_CONFIRMED":
+        action_status="CONFIRMED_WATCH"
+    elif category=="DANTE_PULLBACK":
+        action_status="WATCH_REACCEL_CONFIRM"
+    elif category=="224_HOLD":
+        action_status="WATCH_PULLBACK_CONFIRM"
     elif category=="PRE224_ENERGY":
         action_status="WATCH_224_CONFIRM"
-    elif pd.notna(structural_rr) and structural_rr>=1.5 and category in ("DANTE_PULLBACK","224_HOLD"):
-        action_status="ENTRY_REVIEW"
     else:
-        action_status="WATCH_LOW_RR"
+        action_status="WATCH_STRUCTURE"
     return {
         "category":category,"classic_tier":classic_tier,"action_status":action_status,"score":score,"age":age,"anchor_alive":anchor_alive,"closes_below_anchor":closes_below,
-        "had_224_cross":had_224_cross,"current_above224":currently_above224,"dist224_pct":dist224*100,
+        "had_224_cross":had_224_cross,"pullback_seen":pullback_seen,"pullback_date":pullback_date,
+        "days_since_pull":days_since_pull,"reaccel_confirmed":reaccel_confirmed,
+        "current_above224":currently_above224,"dist224_pct":dist224*100,
         "gap112224_pct":gap112224*100,"headroom448_pct":headroom*100,"drawdown_from_post_high_pct":drawdown*100,
         "volume_cooled":vol_cool,"current_close":float(cur.close),
+        "ema5":float(cur.ema5/factor_cur) if pd.notna(cur.ema5) else np.nan,
+        "ema15":float(cur.ema15/factor_cur) if pd.notna(cur.ema15) else np.nan,
         "ema112":float(cur.ema112/factor_cur),"ema224":ema224_raw,
         "ema448":ema448_raw,"trigger_224_confirm":trigger_raw,"anchor_invalidation":anchor_open_raw,
         "structural_rr_to_448":structural_rr,
@@ -324,9 +368,9 @@ def main():
         classic=out[out["classic_tier"].ne("")].copy()
         if not classic.empty:
             print("\n=== CLASSIC_DANTE_CANDIDATES ===")
-            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","current_close","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
+            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_confirmed","current_close","ema5","ema15","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
         cols=["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio",
-              "current_close","ema112","ema224","ema448","dist224_pct","gap112224_pct","headroom448_pct",
-              "drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]
+              "pullback_date","days_since_pull","reaccel_confirmed","current_close","ema5","ema15","ema112","ema224","ema448",
+              "dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]
         print(out[cols].head(30).to_string(index=False))
 if __name__=="__main__":main()
