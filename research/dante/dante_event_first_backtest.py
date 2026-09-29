@@ -34,7 +34,7 @@ def feat(g):
     g=g.sort_values("date").copy()
     f=(g.adjusted_close/g.close).replace([np.inf,-np.inf],np.nan).ffill().bfill().fillna(1.0)
     g["ao"]=g.open*f; g["ah"]=g.high*f; g["al"]=g.low*f; g["ac"]=g.adjusted_close
-    for n in (112,224,448):g[f"ema{n}"]=g.ac.ewm(span=n,adjust=False,min_periods=n).mean()
+    for n in (5,15,33,56,112,224,448):g[f"ema{n}"]=g.ac.ewm(span=n,adjust=False,min_periods=n).mean()
     g["v20"]=g.volume.rolling(20,min_periods=20).mean()
     g["amt20"]=g.amount.rolling(20,min_periods=20).mean()
     g["vr"]=g.volume/g.v20
@@ -45,6 +45,7 @@ def feat(g):
     g["upper_wick"]=(g.ah-np.maximum(g.ao,g.ac))/rng
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["below80"]=(g.ac<g.ema224).shift(1).rolling(80,min_periods=80).sum()
+    g["prior5_high"]=g.ah.shift(1).rolling(5,min_periods=5).max()
     g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
     g["event_breakout20"]=(g.ac>g.prior20_high)
     g["event_breakout_strength"]=g.ac/g.prior20_high-1
@@ -124,7 +125,7 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
          "signal_headroom448":float(z.at[signal_i,"ema448"]/z.at[signal_i,"ac"]-1) if pd.notna(z.at[signal_i,"ema448"]) and z.at[signal_i,"ac"]>0 else np.nan}
     if context:
         rec.update(context)
-    if kind=="E3_CLASSIC_PULLBACK" and context:
+    if kind in ("E3_CLASSIC_PULLBACK","E4_REACCELERATION") and context:
         stop=float(context.get("anchor_price_adj",np.nan))
         target=float(context.get("target448_signal",np.nan))
         rec.update(simulate_path(z,entry_i,entry,stop,target,20,cost))
@@ -139,7 +140,7 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
 
 def scan_one(g,start,cost):
     z=feat(g)
-    rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999}
+    rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999,"E4_REACCELERATION":-999}
     start_i=max(500,int(z.index[z.date>=start][0]) if (z.date>=start).any() else len(z))
     strong_mask=(
         (z.ret1>=.05) & (z.body>=.035) & (z.vr>=2) & (z.amt20>=5_000_000_000)
@@ -192,7 +193,7 @@ def scan_one(g,start,cost):
             volcool=float(z.at[j,"volume"])<=event_vol*.60
             if 0<=dist<=.08 and -.20<=dd<=-.03 and volcool:
                 pull_i=j;break
-        if pull_i is not None and pull_i-cooldown["E3_CLASSIC_PULLBACK"]>=40:
+        if pull_i is not None:
             pull_ctx=dict(cross_ctx)
             pull_ctx.update({
                 "cross_to_pull_days":int(pull_i-cross_i),
@@ -209,7 +210,35 @@ def scan_one(g,start,cost):
                 "anchor_price_adj":anchor,
                 "target448_signal":float(z.at[pull_i,"ema448"]) if pd.notna(z.at[pull_i,"ema448"]) else np.nan,
             })
-            add_event(rows,z,"E3_CLASSIC_PULLBACK",pull_i,i,cost,context=pull_ctx); cooldown["E3_CLASSIC_PULLBACK"]=pull_i
+            if pull_i-cooldown["E3_CLASSIC_PULLBACK"]>=40:
+                add_event(rows,z,"E3_CLASSIC_PULLBACK",pull_i,i,cost,context=pull_ctx)
+                cooldown["E3_CLASSIC_PULLBACK"]=pull_i
+
+            # Stage 4: transparent re-acceleration confirmation after the pullback.
+            # Generic price/EMA confirmation only; no proprietary Dante indicator is inferred.
+            reaccel_i=None
+            for j in range(pull_i+1,min(pull_i+11,len(z)-1)):
+                if float(z.at[j,"ac"])<anchor:break
+                if any(pd.isna(z.at[j,k]) for k in ["ema5","ema15","ema224","prior5_high"]):continue
+                above224=bool(z.at[j,"ac"]>=z.at[j,"ema224"])
+                reclaim5=bool(z.at[j,"ac"]>z.at[j,"prior5_high"])
+                short_bull=bool(z.at[j,"ema5"]>z.at[j,"ema15"])
+                if above224 and reclaim5 and short_bull:
+                    reaccel_i=j
+                    break
+            if reaccel_i is not None and reaccel_i-cooldown["E4_REACCELERATION"]>=40:
+                reaccel_ctx=dict(pull_ctx)
+                reaccel_ctx.update({
+                    "pull_to_reaccel_days":int(reaccel_i-pull_i),
+                    "event_to_reaccel_days":int(reaccel_i-i),
+                    "reaccel_volume_ratio":float(z.at[reaccel_i,"vr"]) if pd.notna(z.at[reaccel_i,"vr"]) else np.nan,
+                    "reaccel_dist224":float(z.at[reaccel_i,"ac"]/z.at[reaccel_i,"ema224"]-1) if z.at[reaccel_i,"ema224"]>0 else np.nan,
+                    "reaccel_ema5_15_gap":float(z.at[reaccel_i,"ema5"]/z.at[reaccel_i,"ema15"]-1) if z.at[reaccel_i,"ema15"]>0 else np.nan,
+                    "reaccel_headroom448":float(z.at[reaccel_i,"ema448"]/z.at[reaccel_i,"ac"]-1) if z.at[reaccel_i,"ac"]>0 else np.nan,
+                    "target448_signal":float(z.at[reaccel_i,"ema448"]) if pd.notna(z.at[reaccel_i,"ema448"]) else np.nan,
+                })
+                add_event(rows,z,"E4_REACCELERATION",reaccel_i,i,cost,context=reaccel_ctx)
+                cooldown["E4_REACCELERATION"]=reaccel_i
     return rows
 
 def summarize(ev):
@@ -273,7 +302,7 @@ def summarize_robustness(ev):
     """Diagnose regime dependence and winner concentration for E2/E3."""
     out=[]
     if ev.empty:return pd.DataFrame()
-    x=ev[ev["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK"])].copy()
+    x=ev[ev["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCELERATION"])].copy()
     x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
     groups=[
         ("SPLIT",["split","kind"]),
@@ -407,11 +436,11 @@ def summarize_regime_dynamics(ev):
 def summarize_trade_path(ev):
     """Evaluate the actual structural plan: anchor-open invalidation vs signal-day EMA448 target."""
     if ev.empty:return pd.DataFrame()
-    x=ev[ev["kind"]=="E3_CLASSIC_PULLBACK"].copy()
+    x=ev[ev["kind"].isin(["E3_CLASSIC_PULLBACK","E4_REACCELERATION"])].copy()
     if x.empty:return pd.DataFrame()
     x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
     out=[]
-    for view,keys in [("SPLIT",["split"]),("YEAR",["year"]),("SPLIT_EXCHANGE",["split","exchange"])]:
+    for view,keys in [("SPLIT",["split","kind"]),("YEAR",["year","kind"]),("SPLIT_EXCHANGE",["split","exchange","kind"])]:
         for vals,q in x.groupby(keys,dropna=False):
             if not isinstance(vals,tuple):vals=(vals,)
             base={"view":view}
@@ -491,10 +520,10 @@ def main():
             if c in show:show[c]=(show[c]*100).round(2)
         print(show.to_string(index=False))
     if not yr.empty:
-        focus=yr[(yr["view"]=="YEAR_ALL") & (yr["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK"]))].copy()
+        focus=yr[(yr["view"]=="YEAR_ALL") & (yr["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK","E4_REACCELERATION"]))].copy()
         for c in ["mean20","median20","win20","mean60","median60","win60"]:
             if c in focus:focus[c]=(focus[c]*100).round(2)
-        print("\n=== E2/E3 YEARLY DIAGNOSTIC (%) ===")
+        print("\n=== E2/E3/E4 YEARLY DIAGNOSTIC (%) ===")
         print(focus.to_string(index=False))
     if not rb.empty:
         focus=rb[(rb["view"]=="SPLIT") & (rb["kind"]=="E3_CLASSIC_PULLBACK")].copy()
@@ -521,6 +550,6 @@ def main():
             if c in show:show[c]=(show[c]*100).round(2)
         for c in ["mean_r","median_r"]:
             if c in show:show[c]=show[c].round(2)
-        print("\n=== E3 STRUCTURAL TRADE PATH: ANCHOR STOP VS EMA448 TARGET ===")
+        print("\n=== E3/E4 STRUCTURAL TRADE PATH: ANCHOR STOP VS EMA448 TARGET ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
