@@ -58,6 +58,8 @@ def feat(g):
     rng=(g.ah-g.al).replace(0,np.nan)
     g["close_pos"]=(g.ac-g.al)/rng
     g["upper_wick"]=(g.ah-np.maximum(g.ao,g.ac))/rng
+    g["prior1_high"]=g.ah.shift(1)
+    g["prior3_high"]=g.ah.shift(1).rolling(3,min_periods=3).max()
     g["prior5_high"]=g.ah.shift(1).rolling(5,min_periods=5).max()
     g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
@@ -164,7 +166,9 @@ def classify(z,event_date):
     pullback_seen=False
     pullback_date=pd.NaT
     days_since_pull=np.nan
+    reaccel_early=False
     reaccel_confirmed=False
+    reaccel_strong=False
     if had_224_cross:
         p=post.reset_index(drop=True)
         crosses=np.flatnonzero(p.cross224.fillna(False).to_numpy())
@@ -184,15 +188,21 @@ def classify(z,event_date):
                 pullback_seen=True
                 pullback_date=p.at[pull_local,"date"]
                 days_since_pull=int(len(p)-1-pull_local)
-                reaccel_confirmed=bool(
+                common_reaccel=bool(
                     1<=days_since_pull<=10 and anchor_alive and currently_above224 and
-                    pd.notna(cur.prior5_high) and cur.ac>cur.prior5_high and
                     pd.notna(cur.ema5) and pd.notna(cur.ema15) and cur.ema5>cur.ema15
                 )
+                reaccel_early=bool(common_reaccel and pd.notna(cur.prior1_high) and cur.ac>cur.prior1_high)
+                reaccel_confirmed=bool(common_reaccel and pd.notna(cur.prior3_high) and cur.ac>cur.prior3_high)
+                reaccel_strong=bool(common_reaccel and pd.notna(cur.prior5_high) and cur.ac>cur.prior5_high)
 
     category=None
-    if reaccel_confirmed:
+    if reaccel_strong:
+        category="REACCEL_STRONG"
+    elif reaccel_confirmed:
         category="REACCEL_CONFIRMED"
+    elif reaccel_early:
+        category="REACCEL_EARLY"
     elif anchor_alive and had_224_cross and currently_above224 and 0<=dist224<=.08 and -0.20<=drawdown<=-.03 and vol_cool:
         category="DANTE_PULLBACK"
     elif anchor_alive and had_224_cross and currently_above224 and 0<=dist224<=.10:
@@ -203,7 +213,7 @@ def classify(z,event_date):
         category="POST_EVENT_TREND"
     if category is None:return None
 
-    score={"REACCEL_CONFIRMED":46,"DANTE_PULLBACK":40,"224_HOLD":32,"PRE224_ENERGY":25,"POST_EVENT_TREND":20}[category]
+    score={"REACCEL_STRONG":48,"REACCEL_CONFIRMED":46,"REACCEL_EARLY":43,"DANTE_PULLBACK":40,"224_HOLD":32,"PRE224_ENERGY":25,"POST_EVENT_TREND":20}[category]
     score+=10 if long_below else 0
     score+=10 if gap112224<=.05 else 5 if gap112224<=.08 else 0
     score+=10 if headroom>=.10 else 5 if headroom>=.05 else 0
@@ -216,11 +226,15 @@ def classify(z,event_date):
     ema15_raw=float(cur.ema15/factor_cur) if pd.notna(cur.ema15) else np.nan
     ema224_raw=float(cur.ema224/factor_cur)
     ema448_raw=float(cur.ema448/factor_cur)
+    prior1_raw=float(cur.prior1_high/factor_cur) if pd.notna(cur.prior1_high) else np.nan
+    prior3_raw=float(cur.prior3_high/factor_cur) if pd.notna(cur.prior3_high) else np.nan
     prior5_raw=float(cur.prior5_high/factor_cur) if pd.notna(cur.prior5_high) else np.nan
     anchor_open_raw=float(event_open_adj/factor_cur)
     trigger_raw=ema224_raw*1.01
-    reaccel_trigger_raw=max(prior5_raw,ema224_raw) if pd.notna(prior5_raw) else ema224_raw
-    reaccel_trigger_gap=float(reaccel_trigger_raw/float(cur.close)-1) if float(cur.close)>0 else np.nan
+    reaccel_trigger_1d=max(prior1_raw,ema224_raw) if pd.notna(prior1_raw) else ema224_raw
+    reaccel_trigger_3d=max(prior3_raw,ema224_raw) if pd.notna(prior3_raw) else ema224_raw
+    reaccel_trigger_5d=max(prior5_raw,ema224_raw) if pd.notna(prior5_raw) else ema224_raw
+    reaccel_trigger_gap=float(reaccel_trigger_3d/float(cur.close)-1) if float(cur.close)>0 else np.nan
     ema5_above15_now=bool(pd.notna(cur.ema5) and pd.notna(cur.ema15) and cur.ema5>cur.ema15)
     reaccel_window_days_left=max(0,10-int(days_since_pull)) if pullback_seen and pd.notna(days_since_pull) else np.nan
     structural_rr=np.nan
@@ -229,7 +243,7 @@ def classify(z,event_date):
     long_below=bool(e.below80>=60) if pd.notna(e.below80) else False
     classic_tier=""
     if anchor_alive and long_below and age>=1:
-        if category=="REACCEL_CONFIRMED" and 3<=headroom*100<=30 and gap112224<=.08:
+        if category in ("REACCEL_STRONG","REACCEL_CONFIRMED","REACCEL_EARLY") and 3<=headroom*100<=30 and gap112224<=.08:
             classic_tier="A"
         elif category=="DANTE_PULLBACK" and 3<=headroom*100<=30 and gap112224<=.08:
             classic_tier="A"
@@ -239,8 +253,12 @@ def classify(z,event_date):
             classic_tier="B"
     if not classic_tier:
         action_status="RESEARCH_ONLY"
+    elif category=="REACCEL_STRONG":
+        action_status="STRONG_CONFIRM_WATCH"
     elif category=="REACCEL_CONFIRMED":
         action_status="CONFIRMED_WATCH"
+    elif category=="REACCEL_EARLY":
+        action_status="EARLY_REACCEL_WATCH"
     elif category=="DANTE_PULLBACK":
         action_status="WATCH_REACCEL_CONFIRM"
     elif category=="224_HOLD":
@@ -252,14 +270,17 @@ def classify(z,event_date):
     return {
         "category":category,"classic_tier":classic_tier,"action_status":action_status,"score":score,"age":age,"anchor_alive":anchor_alive,"closes_below_anchor":closes_below,
         "had_224_cross":had_224_cross,"pullback_seen":pullback_seen,"pullback_date":pullback_date,
-        "days_since_pull":days_since_pull,"reaccel_confirmed":reaccel_confirmed,
+        "days_since_pull":days_since_pull,"reaccel_early":reaccel_early,
+        "reaccel_confirmed":reaccel_confirmed,"reaccel_strong":reaccel_strong,
         "current_above224":currently_above224,"dist224_pct":dist224*100,
         "gap112224_pct":gap112224*100,"headroom448_pct":headroom*100,"drawdown_from_post_high_pct":drawdown*100,
         "volume_cooled":vol_cool,"current_close":float(cur.close),
         "ema5":ema5_raw,"ema15":ema15_raw,"ema5_above15_now":ema5_above15_now,
         "ema112":float(cur.ema112/factor_cur),"ema224":ema224_raw,
         "ema448":ema448_raw,"trigger_224_confirm":trigger_raw,
-        "prior5_high":prior5_raw,"reaccel_trigger_close":reaccel_trigger_raw,
+        "prior1_high":prior1_raw,"prior3_high":prior3_raw,"prior5_high":prior5_raw,
+        "reaccel_trigger_1d":reaccel_trigger_1d,"reaccel_trigger_3d":reaccel_trigger_3d,
+        "reaccel_trigger_5d":reaccel_trigger_5d,"reaccel_trigger_close":reaccel_trigger_3d,
         "reaccel_trigger_gap_pct":reaccel_trigger_gap*100 if pd.notna(reaccel_trigger_gap) else np.nan,
         "reaccel_window_days_left":reaccel_window_days_left,
         "anchor_invalidation":anchor_open_raw,
@@ -378,10 +399,10 @@ def main():
         classic=out[out["classic_tier"].ne("")].copy()
         if not classic.empty:
             print("\n=== CLASSIC_DANTE_CANDIDATES ===")
-            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_window_days_left","reaccel_confirmed","current_close","prior5_high","reaccel_trigger_close","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
+            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_window_days_left","reaccel_early","reaccel_confirmed","reaccel_strong","current_close","prior1_high","prior3_high","prior5_high","reaccel_trigger_1d","reaccel_trigger_3d","reaccel_trigger_5d","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
         cols=["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio",
-              "pullback_date","days_since_pull","reaccel_window_days_left","reaccel_confirmed","current_close",
-              "prior5_high","reaccel_trigger_close","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now",
+              "pullback_date","days_since_pull","reaccel_window_days_left","reaccel_early","reaccel_confirmed","reaccel_strong","current_close",
+              "prior1_high","prior3_high","prior5_high","reaccel_trigger_1d","reaccel_trigger_3d","reaccel_trigger_5d","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now",
               "ema112","ema224","ema448","dist224_pct","gap112224_pct","headroom448_pct",
               "drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]
         print(out[cols].head(30).to_string(index=False))
