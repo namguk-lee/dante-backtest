@@ -212,10 +212,17 @@ def classify(z,event_date):
     score+=6 if bool(e.ac>e.prior20_high) else 0
     score+=4 if (e.close_pos>=.65 and e.upper_wick<=.35) else 0
     factor_cur=float(cur.ac/cur.close) if float(cur.close)>0 else 1.0
+    ema5_raw=float(cur.ema5/factor_cur) if pd.notna(cur.ema5) else np.nan
+    ema15_raw=float(cur.ema15/factor_cur) if pd.notna(cur.ema15) else np.nan
     ema224_raw=float(cur.ema224/factor_cur)
     ema448_raw=float(cur.ema448/factor_cur)
+    prior5_raw=float(cur.prior5_high/factor_cur) if pd.notna(cur.prior5_high) else np.nan
     anchor_open_raw=float(event_open_adj/factor_cur)
     trigger_raw=ema224_raw*1.01
+    reaccel_trigger_raw=max(prior5_raw,ema224_raw) if pd.notna(prior5_raw) else ema224_raw
+    reaccel_trigger_gap=float(reaccel_trigger_raw/float(cur.close)-1) if float(cur.close)>0 else np.nan
+    ema5_above15_now=bool(pd.notna(cur.ema5) and pd.notna(cur.ema15) and cur.ema5>cur.ema15)
+    reaccel_window_days_left=max(0,10-int(days_since_pull)) if pullback_seen and pd.notna(days_since_pull) else np.nan
     structural_rr=np.nan
     if trigger_raw>anchor_open_raw and ema448_raw>trigger_raw:
         structural_rr=(ema448_raw-trigger_raw)/(trigger_raw-anchor_open_raw)
@@ -249,10 +256,13 @@ def classify(z,event_date):
         "current_above224":currently_above224,"dist224_pct":dist224*100,
         "gap112224_pct":gap112224*100,"headroom448_pct":headroom*100,"drawdown_from_post_high_pct":drawdown*100,
         "volume_cooled":vol_cool,"current_close":float(cur.close),
-        "ema5":float(cur.ema5/factor_cur) if pd.notna(cur.ema5) else np.nan,
-        "ema15":float(cur.ema15/factor_cur) if pd.notna(cur.ema15) else np.nan,
+        "ema5":ema5_raw,"ema15":ema15_raw,"ema5_above15_now":ema5_above15_now,
         "ema112":float(cur.ema112/factor_cur),"ema224":ema224_raw,
-        "ema448":ema448_raw,"trigger_224_confirm":trigger_raw,"anchor_invalidation":anchor_open_raw,
+        "ema448":ema448_raw,"trigger_224_confirm":trigger_raw,
+        "prior5_high":prior5_raw,"reaccel_trigger_close":reaccel_trigger_raw,
+        "reaccel_trigger_gap_pct":reaccel_trigger_gap*100 if pd.notna(reaccel_trigger_gap) else np.nan,
+        "reaccel_window_days_left":reaccel_window_days_left,
+        "anchor_invalidation":anchor_open_raw,
         "structural_rr_to_448":structural_rr,
         "current_volume_ratio":float(cur.vr) if pd.notna(cur.vr) else np.nan,
         "current_turnover20":float(cur.amount20) if pd.notna(cur.amount20) else np.nan
@@ -368,9 +378,11 @@ def main():
         classic=out[out["classic_tier"].ne("")].copy()
         if not classic.empty:
             print("\n=== CLASSIC_DANTE_CANDIDATES ===")
-            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_confirmed","current_close","ema5","ema15","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
+            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_window_days_left","reaccel_confirmed","current_close","prior5_high","reaccel_trigger_close","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
         cols=["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio",
-              "pullback_date","days_since_pull","reaccel_confirmed","current_close","ema5","ema15","ema112","ema224","ema448",
-              "dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]
+              "pullback_date","days_since_pull","reaccel_window_days_left","reaccel_confirmed","current_close",
+              "prior5_high","reaccel_trigger_close","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now",
+              "ema112","ema224","ema448","dist224_pct","gap112224_pct","headroom448_pct",
+              "drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]
         print(out[cols].head(30).to_string(index=False))
 if __name__=="__main__":main()
