@@ -173,6 +173,13 @@ def classify(z,event_date):
     score+=8 if closes_below==0 else 3
     score+=6 if bool(e.ac>e.prior20_high) else 0
     factor_cur=float(cur.ac/cur.close) if float(cur.close)>0 else 1.0
+    ema224_raw=float(cur.ema224/factor_cur)
+    ema448_raw=float(cur.ema448/factor_cur)
+    anchor_open_raw=float(event_open_adj/factor_cur)
+    trigger_raw=ema224_raw*1.01
+    structural_rr=np.nan
+    if trigger_raw>anchor_open_raw and ema448_raw>trigger_raw:
+        structural_rr=(ema448_raw-trigger_raw)/(trigger_raw-anchor_open_raw)
     long_below=bool(e.below80>=60) if pd.notna(e.below80) else False
     classic_tier=""
     if anchor_alive and long_below and age>=1:
@@ -187,8 +194,10 @@ def classify(z,event_date):
         "had_224_cross":had_224_cross,"current_above224":currently_above224,"dist224_pct":dist224*100,
         "gap112224_pct":gap112224*100,"headroom448_pct":headroom*100,"drawdown_from_post_high_pct":drawdown*100,
         "volume_cooled":vol_cool,"current_close":float(cur.close),
-        "ema112":float(cur.ema112/factor_cur),"ema224":float(cur.ema224/factor_cur),
-        "ema448":float(cur.ema448/factor_cur),"current_volume_ratio":float(cur.vr) if pd.notna(cur.vr) else np.nan,
+        "ema112":float(cur.ema112/factor_cur),"ema224":ema224_raw,
+        "ema448":ema448_raw,"trigger_224_confirm":trigger_raw,"anchor_invalidation":anchor_open_raw,
+        "structural_rr_to_448":structural_rr,
+        "current_volume_ratio":float(cur.vr) if pd.notna(cur.vr) else np.nan,
         "current_turnover20":float(cur.amount20) if pd.notna(cur.amount20) else np.nan
     }
 
@@ -229,7 +238,7 @@ def main():
         classic=out[out["classic_tier"].ne("")].copy()
         if not classic.empty:
             print("\n=== CLASSIC_DANTE_CANDIDATES ===")
-            print(classic[["rank","code","name","exchange","classic_tier","category","score","event_date","event_ret_pct","event_volume_ratio","current_close","ema112","ema224","ema448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
+            print(classic[["rank","code","name","exchange","classic_tier","category","score","event_date","event_ret_pct","event_volume_ratio","current_close","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
         cols=["rank","code","name","exchange","classic_tier","category","score","event_date","event_ret_pct","event_volume_ratio",
               "current_close","ema112","ema224","ema448","dist224_pct","gap112224_pct","headroom448_pct",
               "drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]
