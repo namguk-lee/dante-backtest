@@ -313,6 +313,7 @@ def scan_one(g,start,cost):
                         "reaccel_dist224":float(z.at[reaccel_i,"ac"]/z.at[reaccel_i,"ema224"]-1) if z.at[reaccel_i,"ema224"]>0 else np.nan,
                         "reaccel_ema5_15_gap":float(z.at[reaccel_i,"ema5"]/z.at[reaccel_i,"ema15"]-1) if z.at[reaccel_i,"ema15"]>0 else np.nan,
                         "reaccel_headroom448":float(z.at[reaccel_i,"ema448"]/z.at[reaccel_i,"ac"]-1) if z.at[reaccel_i,"ac"]>0 else np.nan,
+                        "reaccel_structural_rr":float((z.at[reaccel_i,"ema448"]-z.at[reaccel_i,"ac"])/(z.at[reaccel_i,"ac"]-anchor)) if pd.notna(z.at[reaccel_i,"ema448"]) and z.at[reaccel_i,"ac"]>anchor and z.at[reaccel_i,"ema448"]>z.at[reaccel_i,"ac"] else np.nan,
                         "target448_signal":float(z.at[reaccel_i,"ema448"]) if pd.notna(z.at[reaccel_i,"ema448"]) else np.nan,
                     })
                     add_event(rows,z,kind,reaccel_i,i,cost,context=reaccel_ctx)
@@ -573,12 +574,17 @@ def summarize_e4_confirmation(ev):
         x["pull_to_reaccel_days"],[-np.inf,3,6,np.inf],
         labels=["LE2","3_5","GE6"],right=False,
     )
+    x["reaccel_rr_bin"]=pd.cut(
+        x["reaccel_structural_rr"],[-np.inf,.5,1.0,1.5,2.0,np.inf],
+        labels=["LT0_5","0_5_1_0","1_0_1_5","1_5_2_0","GE2_0"],right=False,
+    )
     dimensions=[
         ("REACCEL_VOLUME","reaccel_volume_bin"),
         ("REACCEL_DIST224","reaccel_dist224_bin"),
         ("REACCEL_EMA5_15","reaccel_ema5_15_bin"),
         ("REACCEL_HEADROOM448","reaccel_headroom_bin"),
         ("PULL_TO_REACCEL","pull_to_reaccel_bin"),
+        ("REACCEL_STRUCTURAL_RR","reaccel_rr_bin"),
         ("EVENT_QUALITY","event_quality"),
         ("EXCHANGE","exchange"),
     ]
