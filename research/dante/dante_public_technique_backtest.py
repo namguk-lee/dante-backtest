@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from dante_signal_matrix_research import load, features, candle_line_distance_pct
 
-TECHS=("256_LONG","MA_HIT_112_224","MA_HIT_224_448","BOWL3_STRUCTURE","PUBLIC_CONFLUENCE_2PLUS")
+TECHS=("256_LONG","MA_HIT_112_224","MA_HIT_224_448","BOWL3_STRUCTURE","PUBLIC_224_4MONTH_NEAR10","PUBLIC_CONFLUENCE_2PLUS")
 
 def args():
     p=argparse.ArgumentParser()
@@ -57,6 +57,33 @@ def bowl_mask(z):
         if decline_days>=10 and pd.notna(decline_pct) and decline_pct<=-20 and base_days>=40 and base_days>=decline_days:
             out[i]=True
     return pd.Series(out,index=z.index)
+
+def public_224_4month_mask(z,liq,min_below_sessions=80):
+    """Approximate the public '4 months below 224 + within ±10%' search rule.
+
+    80 trading sessions is the transparent research translation of ~4 months.
+    The completed below-EMA224 run is carried forward after an upward recovery
+    while price remains near EMA224.
+    """
+    n=len(z)
+    run=np.zeros(n,dtype=float)
+    current=0
+    last_completed=0
+    for i in range(n):
+        if pd.isna(z.at[i,"ema224"]):
+            current=0; last_completed=0; run[i]=0
+            continue
+        below=bool(z.at[i,"ac"]<z.at[i,"ema224"])
+        if below:
+            current+=1
+            run[i]=current
+        else:
+            if i>0 and pd.notna(z.at[i-1,"ema224"]) and z.at[i-1,"ac"]<z.at[i-1,"ema224"]:
+                last_completed=current
+            current=0
+            run[i]=last_completed
+    dist224=(z.ac/z.ema224-1)*100
+    return liq&dist224.between(-10,10)&(pd.Series(run,index=z.index)>=min_below_sessions)
 
 def sparse_events(mask,cooldown):
     ids=[]; last=-10**9
@@ -153,12 +180,14 @@ def per_series(g,min_turnover,cooldown):
     sig112=liq&reverse&(d112<=60)&(z.ac>=z.ema112)&(z.ac<z.ema224)
     sig224=liq&(d224<=60)&(z.ac>=z.ema224)&(z.ac<z.ema448)
     sigbowl=liq&bowl_mask(z)
+    sig224public=public_224_4month_mask(z,liq,80)
 
     masks={
         "256_LONG":sig256,
         "MA_HIT_112_224":sig112,
         "MA_HIT_224_448":sig224,
         "BOWL3_STRUCTURE":sigbowl,
+        "PUBLIC_224_4MONTH_NEAR10":sig224public,
     }
     stack=pd.DataFrame({k:v.astype(int) for k,v in masks.items()})
     masks["PUBLIC_CONFLUENCE_2PLUS"]=liq&(stack.sum(axis=1)>=2)
