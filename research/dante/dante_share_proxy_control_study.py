@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Matched-market control study for Dante share 1:1 candidate geometries.
+"""Fast matched-market control study for Dante share 1:1 candidate geometries.
 
-Research-only. Tests whether candidate ratios that fit labeled public examples
-are actually selective versus same-date KOSPI/KOSDAQ controls.
+Research-only. Computes only the three candidate metrics needed for controls.
 """
 from __future__ import annotations
 import argparse, math
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from dante_share_1to1_study import load, feat, choose_cross
+from dante_share_1to1_study import (
+    load, feat, structural_up_crosses, contiguous_runs, prior_down_cross, safe_ratio
+)
 
 def parse_args():
     p=argparse.ArgumentParser()
@@ -24,51 +25,81 @@ def near1(v):
     if pd.isna(v) or v<=0:return np.nan
     return abs(math.log(float(v)))
 
-def select_long_below(allg,min_days=30):
-    q=[g for g in allg if float(g.get("pre_days",0) or 0)>=min_days]
-    if not q:return None
-    return sorted(q,key=lambda x:pd.Timestamp(x["cross_date"]))[-1]
+def lightweight_long_metrics(z,ma_n,min_days=30):
+    crosses=structural_up_crosses(z,ma_n)
+    chosen=None
+    for cross_i,_,_ in reversed(crosses):
+        ps,pe,_,_=contiguous_runs(z,cross_i)
+        pre_days=pe-ps+1
+        if pre_days>=min_days:
+            chosen=(cross_i,ps,pe,pre_days)
+            break
+    if chosen is None:return None
+    cross_i,ps,pe,pre_days=chosen
+    pre=z.iloc[ps:pe+1]
+    ma0=float(z.at[cross_i,"ma"])
+    current=float(z.iloc[-1].ac)
+    pre_low=float(pre.al.min())
+    down=(ma0-pre_low)/ma0 if ma0>0 else np.nan
+    up=(current-ma0)/ma0 if ma0>0 else np.nan
+    long_ratio=safe_ratio(up,down)
+
+    dc=prior_down_cross(z,cross_i,ma_n)
+    start=max(0,cross_i-max(60,ma_n)) if dc is None else dc
+    seg=z.iloc[start:].copy()
+    seg=seg[pd.notna(seg.ma)]
+    up_mean=float(seg.loc[seg.dist>0,"dist"].mean()) if (seg.dist>0).any() else np.nan
+    dn_mean=float((-seg.loc[seg.dist<0,"dist"]).mean()) if (seg.dist<0).any() else np.nan
+    cycle_mean=safe_ratio(up_mean,dn_mean)
+
+    pre_cycle=z.iloc[start:cross_i]
+    neg_depth=float((-pre_cycle.dist).clip(lower=0).max()) if len(pre_cycle) else np.nan
+    pos_current=float(max(0,z.iloc[-1].dist))
+    cycle_height=safe_ratio(pos_current,neg_depth)
+
+    return {
+        "long_ratio":long_ratio,
+        "long_cycle_mean_ratio":cycle_mean,
+        "long_cycle_height_ratio":cycle_height,
+        "long_pre_days":pre_days,
+        "long_cross_date":z.at[cross_i,"date"],
+    }
 
 def one_metrics(g,ma_n,analysis_date):
     z=feat(g[g.date<=analysis_date].copy(),ma_n)
     if len(z)<ma_n+30 or pd.isna(z.iloc[-1].ma):return None
-    selected,allg=choose_cross(z,ma_n)
-    longsel=select_long_below(allg,30)
+    m=lightweight_long_metrics(z,ma_n,30)
     return {
         "above_ma":bool(z.iloc[-1].ac>=z.iloc[-1].ma),
         "dist_ma_pct":float((z.iloc[-1].ac/z.iloc[-1].ma-1)*100),
-        "num_crosses":len(allg),
-        "latest_ratio":selected.get("ratio_cross_ma_current",np.nan) if selected else np.nan,
-        "long_ratio":longsel.get("ratio_cross_ma_current",np.nan) if longsel else np.nan,
-        "long_cycle_mean_ratio":longsel.get("cycle_mean_dist_ratio",np.nan) if longsel else np.nan,
-        "long_cycle_height_ratio":longsel.get("cycle_height_current_ratio",np.nan) if longsel else np.nan,
-        "long_pre_days":longsel.get("pre_days",np.nan) if longsel else np.nan,
-        "long_cross_date":longsel.get("cross_date",pd.NaT) if longsel else pd.NaT,
+        **(m or {
+            "long_ratio":np.nan,"long_cycle_mean_ratio":np.nan,
+            "long_cycle_height_ratio":np.nan,"long_pre_days":np.nan,"long_cross_date":pd.NaT
+        })
     }
 
-def metric_market_stats(q,metric):
-    e=q[q.above_ma & pd.to_numeric(q[metric],errors="coerce").notna()].copy()
-    v=pd.to_numeric(e[metric],errors="coerce")
-    pos=v[v>0]
+def market_stats(q,metric):
+    e=pd.to_numeric(q.loc[q.above_ma,metric],errors="coerce")
+    e=e[e>0]
     return {
-        f"{metric}_eligible_n":len(pos),
-        f"{metric}_median":float(pos.median()) if len(pos) else np.nan,
-        f"{metric}_within20_pct":float(((pos>=.8)&(pos<=1.2)).mean()*100) if len(pos) else np.nan,
-        f"{metric}_within35_pct":float(((pos>=.65)&(pos<=1.35)).mean()*100) if len(pos) else np.nan,
-        f"{metric}_ge1_pct":float((pos>=1).mean()*100) if len(pos) else np.nan,
+        f"{metric}_eligible_n":len(e),
+        f"{metric}_median":float(e.median()) if len(e) else np.nan,
+        f"{metric}_within20_pct":float(((e>=.8)&(e<=1.2)).mean()*100) if len(e) else np.nan,
+        f"{metric}_within35_pct":float(((e>=.65)&(e<=1.35)).mean()*100) if len(e) else np.nan,
+        f"{metric}_ge1_pct":float((e>=1).mean()*100) if len(e) else np.nan,
     }
 
-def labeled_structural_values(out_dir):
+def labeled_from_crosses(out_dir):
     p=out_dir/"share_1to1_all_structural_crosses_v3.csv"
     if not p.exists():return {}
     x=pd.read_csv(p,dtype={"code":str})
     x["code"]=x.code.astype(str).str.zfill(6)
     x["analysis_date"]=pd.to_datetime(x.analysis_date)
+    x["cross_date"]=pd.to_datetime(x.cross_date)
     vals={}
     for (dt,code,ma),g in x.groupby(["analysis_date","code","share_ma"],dropna=False):
         q=g[pd.to_numeric(g.pre_days,errors="coerce")>=30].copy()
         if q.empty:continue
-        q["cross_date"]=pd.to_datetime(q.cross_date)
         r=q.sort_values("cross_date").iloc[-1]
         vals[(pd.Timestamp(dt),str(code).zfill(6),int(ma))]={
             "long_ratio":r.get("ratio_cross_ma_current",np.nan),
@@ -85,16 +116,17 @@ def main():
     cases=pd.read_csv(a.cases,dtype={"code":str})
     cases["code"]=cases.code.astype(str).str.zfill(6)
     cases["analysis_date"]=pd.to_datetime(cases.analysis_date)
+    confirmed=cases[cases.label.eq("confirmed_1to1")].copy()
 
-    result_rows=[]; stock_rows=[]
-    pairs=cases[["analysis_date","share_ma"]].drop_duplicates().sort_values(["analysis_date","share_ma"])
+    stock_rows=[]; summary_rows=[]
+    pairs=confirmed[["analysis_date","share_ma"]].drop_duplicates().sort_values(["analysis_date","share_ma"])
     for _,pair in pairs.iterrows():
         dt=pd.Timestamp(pair.analysis_date); ma_n=int(pair.share_ma)
         snap=panel[panel.date<=dt]
         last_date=snap.date.max()
-        active_ids=set(snap.loc[snap.date.eq(last_date),"series_id"].astype(str))
+        active=set(snap.loc[snap.date.eq(last_date),"series_id"].astype(str))
         vals=[]
-        for sid,g in snap[snap.series_id.astype(str).isin(active_ids)].groupby("series_id",sort=False):
+        for sid,g in snap[snap.series_id.astype(str).isin(active)].groupby("series_id",sort=False):
             r=one_metrics(g,ma_n,dt)
             if r is None:continue
             last=g[g.date<=dt].sort_values("date").iloc[-1]
@@ -106,43 +138,41 @@ def main():
         if q.empty:continue
         rec={"analysis_date":dt,"share_ma":ma_n,"active_n":len(q)}
         for m in ("long_ratio","long_cycle_mean_ratio","long_cycle_height_ratio"):
-            rec.update(metric_market_stats(q,m))
-        result_rows.append(rec)
+            rec.update(market_stats(q,m))
+        summary_rows.append(rec)
         stock_rows.extend(q.to_dict("records"))
 
     stocks=pd.DataFrame(stock_rows)
-    summary=pd.DataFrame(result_rows)
-    labeled_geom=labeled_structural_values(a.out)
+    summary=pd.DataFrame(summary_rows)
+    labeled_geom=labeled_from_crosses(a.out)
     labeled=[]
-    for case in cases.to_dict("records"):
+    for case in confirmed.to_dict("records"):
         dt=pd.Timestamp(case["analysis_date"]); ma_n=int(case["share_ma"]); code=case["code"]
         universe=stocks[(stocks.analysis_date.eq(dt))&(stocks.share_ma.eq(ma_n))&stocks.above_ma].copy()
-        base={**case,"matched_market_control":bool(len(universe))}
         gv=labeled_geom.get((dt,code,ma_n),{})
+        rec={**case,"eligible_universe_n":len(universe)}
         for m in ("long_ratio","long_cycle_mean_ratio","long_cycle_height_ratio"):
-            cand=gv.get(m,np.nan)
-            base[m]=cand
-            uv=pd.to_numeric(universe[m],errors="coerce")
-            uv=uv[uv>0]
+            cand=gv.get(m,np.nan); rec[m]=cand
+            uv=pd.to_numeric(universe[m],errors="coerce"); uv=uv[uv>0]
             if pd.notna(cand) and cand>0 and len(uv):
                 ce=near1(cand); ue=np.abs(np.log(uv))
-                base[f"{m}_near1_percentile"]=float((ue>=ce).mean()*100)
-                base[f"{m}_market_within35_pct"]=float(((uv>=.65)&(uv<=1.35)).mean()*100)
+                rec[f"{m}_near1_percentile"]=float((ue>=ce).mean()*100)
+                rec[f"{m}_market_within35_pct"]=float(((uv>=.65)&(uv<=1.35)).mean()*100)
+                rec[f"{m}_market_median"]=float(uv.median())
             else:
-                base[f"{m}_near1_percentile"]=np.nan
-                base[f"{m}_market_within35_pct"]=np.nan
-        base["long_pre_days"]=gv.get("long_pre_days",np.nan)
-        base["long_cross_date"]=gv.get("long_cross_date",pd.NaT)
-        base["eligible_universe_n"]=len(universe)
-        labeled.append(base)
+                rec[f"{m}_near1_percentile"]=np.nan
+                rec[f"{m}_market_within35_pct"]=np.nan
+                rec[f"{m}_market_median"]=np.nan
+        rec["long_pre_days"]=gv.get("long_pre_days",np.nan)
+        rec["long_cross_date"]=gv.get("long_cross_date",pd.NaT)
+        labeled.append(rec)
 
-    summary.to_csv(a.out/"share_proxy_market_summary_v2.csv",index=False,encoding="utf-8-sig")
-    pd.DataFrame(labeled).to_csv(a.out/"share_proxy_labeled_vs_market_v2.csv",index=False,encoding="utf-8-sig")
-    stocks.to_csv(a.out/"share_proxy_market_all_v2.csv",index=False,encoding="utf-8-sig")
-
-    print("=== MARKET SUMMARY V2 ===")
+    summary.to_csv(a.out/"share_proxy_market_summary_v3.csv",index=False,encoding="utf-8-sig")
+    pd.DataFrame(labeled).to_csv(a.out/"share_proxy_labeled_vs_market_v3.csv",index=False,encoding="utf-8-sig")
+    stocks.to_csv(a.out/"share_proxy_market_all_v3.csv",index=False,encoding="utf-8-sig")
+    print("=== MARKET SUMMARY V3 ===")
     print(summary.to_string(index=False))
-    print("\n=== LABELED VS MARKET V2 ===")
+    print("\n=== LABELED VS MARKET V3 ===")
     print(pd.DataFrame(labeled).to_string(index=False))
 
 if __name__=="__main__":
