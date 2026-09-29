@@ -81,7 +81,7 @@ def main():
         liquid=bool(r.turnover20>=a.min_turnover)
         bullish=bool(r.ac>r.ao)
         vbase=bool(1.5<=r.volume_ratio<=5)
-        base=bool(r.cross224 and r.below80>=60 and rev and bullish and vbase and liquid)
+        base=bool(r.cross224 and r.below80>=60 and rev and bullish and vbase and liquid and room)
         strong=bool(base and r.volume_ratio>=2 and r.body_pct>=.02 and r.ac>r.prior20_close_high and r.close_pos>=.70 and r.upper_wick_ratio<=.30 and room)
         near=bool((-0.03<=r.dist224<0) and r.below80>=60 and rev and conv and room and liquid)
         # recent breakout / pullback using only history available as-of
@@ -92,7 +92,7 @@ def main():
             hits=hist[(hist.cross224)&(hist.below80>=60)&(hist.ema112<hist.ema224)&(hist.ema224<hist.ema448)&(hist.volume_ratio>=1.5)&(hist.volume_ratio<=5)&(hist.ac>hist.ao)]
             if not hits.empty:
                 h=hits.iloc[-1]; breakout_age=i-h.name if isinstance(h.name,(int,np.integer)) else len(hist)-1
-                pull=bool(0<=r.dist224<=.05 and r.ac>=r.ema224 and r.volume< h.volume and bullish and liquid)
+                pull=bool(0<=r.dist224<=.05 and r.ac>=r.ema224 and r.volume< h.volume and bullish and liquid and room)
         category="STRONG_BREAKOUT" if strong else "BREAKOUT" if base else "PULLBACK" if pull else "NEAR_BREAKOUT" if near else None
         if not category: continue
         score=0.0
