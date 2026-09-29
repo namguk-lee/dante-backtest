@@ -296,6 +296,57 @@ def summarize_structure(ev):
             out.append(rec)
     return pd.DataFrame(out)
 
+
+def summarize_regime_dynamics(ev):
+    """Test whether E3 depends on an improving market regime, not static breadth alone."""
+    if ev.empty:return pd.DataFrame()
+    x=ev[ev["kind"]=="E3_CLASSIC_PULLBACK"].copy()
+    if x.empty:return pd.DataFrame()
+    x["breadth20_chg20_bin"]=pd.cut(
+        x["breadth20_chg20"],[-np.inf,-.10,0,.10,np.inf],
+        labels=["LE_M10PP","M10_0PP","0_10PP","GE10PP"],right=False,
+    )
+    x["breadth60_chg20_bin"]=pd.cut(
+        x["breadth60_chg20"],[-np.inf,-.10,0,.10,np.inf],
+        labels=["LE_M10PP","M10_0PP","0_10PP","GE10PP"],right=False,
+    )
+    x["market_median20_bin"]=pd.cut(
+        x["market_median20"],[-np.inf,-.10,0,.10,np.inf],
+        labels=["LT_M10","M10_0","0_10","GE10"],right=False,
+    )
+    x["market_median60_bin"]=pd.cut(
+        x["market_median60"],[-np.inf,-.15,0,.15,np.inf],
+        labels=["LT_M15","M15_0","0_15","GE15"],right=False,
+    )
+    x["breadth_recovery_state"]=np.select(
+        [
+            (x["breadth20_chg20"]>=.10)&(x["breadth20"]>=.50),
+            (x["breadth20_chg20"]>=.10)&(x["breadth20"]<.50),
+            (x["breadth20_chg20"]<0)&(x["breadth20"]<.50),
+        ],
+        ["BROAD_RECOVERY","NARROW_RECOVERY","WEAKENING_WEAK"],
+        default="OTHER",
+    )
+    dimensions=[
+        ("BREADTH20_CHG20","breadth20_chg20_bin"),
+        ("BREADTH60_CHG20","breadth60_chg20_bin"),
+        ("MARKET_MEDIAN20","market_median20_bin"),
+        ("MARKET_MEDIAN60","market_median60_bin"),
+        ("BREADTH_RECOVERY_STATE","breadth_recovery_state"),
+    ]
+    out=[]
+    for view,col in dimensions:
+        for (sp,bucket),q in x.groupby(["split",col],dropna=False,observed=True):
+            rec={"view":view,"bucket":bucket,"split":sp,"n":len(q)}
+            for h in (20,60):
+                s=q[f"ret{h}"].dropna()
+                rec[f"n{h}"]=len(s)
+                rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+                rec[f"median{h}"]=s.median() if len(s) else np.nan
+                rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -306,8 +357,19 @@ def main():
     b=panel.dropna(subset=["mret20","mret60"]).copy()
     b["up20"]=(b["mret20"]>0).astype(float)
     b["up60"]=(b["mret60"]>0).astype(float)
-    breadth=(b.groupby(["exchange","date"],as_index=False)[["up20","up60"]].mean()
-               .rename(columns={"date":"signal_date","up20":"breadth20","up60":"breadth60"}))
+    breadth=(b.groupby(["exchange","date"],as_index=False)
+               .agg(
+                   breadth20=("up20","mean"),
+                   breadth60=("up60","mean"),
+                   market_mean20=("mret20","mean"),
+                   market_median20=("mret20","median"),
+                   market_mean60=("mret60","mean"),
+                   market_median60=("mret60","median"),
+               )
+               .rename(columns={"date":"signal_date"})
+               .sort_values(["exchange","signal_date"]))
+    breadth["breadth20_chg20"]=breadth.groupby("exchange",sort=False)["breadth20"].diff(20)
+    breadth["breadth60_chg20"]=breadth.groupby("exchange",sort=False)["breadth60"].diff(20)
     start=pd.Timestamp(a.start); cost=a.cost_bps/10000.0
     rows=[]; total=panel.series_id.nunique()
     for n,(sid,g) in enumerate(panel.groupby("series_id",sort=False),1):
@@ -326,6 +388,8 @@ def main():
     rb.to_csv(a.out/"event_first_robustness.csv",index=False,encoding="utf-8-sig")
     st=summarize_structure(ev)
     st.to_csv(a.out/"event_first_structure.csv",index=False,encoding="utf-8-sig")
+    rg=summarize_regime_dynamics(ev)
+    rg.to_csv(a.out/"event_first_regime_dynamics.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -350,5 +414,11 @@ def main():
         for c in ["mean20","median20","win20","mean60","median60","win60"]:
             if c in show:show[c]=(show[c]*100).round(2)
         print("\n=== E3 STRUCTURE DIAGNOSTIC BY SPLIT (%) ===")
+        print(show.to_string(index=False))
+    if not rg.empty:
+        show=rg.copy()
+        for c in ["mean20","median20","win20","mean60","median60","win60"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        print("\n=== E3 MARKET REGIME DYNAMICS (%) ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
