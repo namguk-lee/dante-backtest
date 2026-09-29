@@ -176,10 +176,13 @@ def render_candidate_chart(z,rec,out_dir,bars=120):
     levels=[
         ("Anchor invalid",rec.get("anchor_invalidation")),
         ("224 confirm",rec.get("trigger_224_confirm")),
-        ("E4 1D",rec.get("reaccel_trigger_1d")),
-        ("E4 3D",rec.get("reaccel_trigger_3d")),
-        ("E4 5D",rec.get("reaccel_trigger_5d")),
     ]
+    if bool(rec.get("pullback_seen",False)):
+        levels.extend([
+            ("E4 1D",rec.get("reaccel_trigger_1d")),
+            ("E4 3D",rec.get("reaccel_trigger_3d")),
+            ("E4 5D",rec.get("reaccel_trigger_5d")),
+        ])
     for label,val in levels:
         if pd.notna(val):
             ax.axhline(float(val),linewidth=.7,alpha=.55)
@@ -198,7 +201,7 @@ def render_candidate_chart(z,rec,out_dir,bars=120):
     av.set_xticks(ticks)
     av.set_xticklabels([pd.Timestamp(t.at[i,"date"]).strftime("%m-%d") for i in ticks],rotation=0)
 
-    title=(f'{rec.get("code","")} {rec.get("name","")} | '
+    title=(f'{rec.get("code","")} | '
            f'{rec.get("classic_tier","")} {rec.get("action_status","")} | {rec.get("category","")}')
     ax.set_title(title)
     note=(f'event {pd.Timestamp(rec.get("event_date")).date()} '
@@ -311,6 +314,15 @@ def classify(z,event_date):
     structural_rr=np.nan
     if trigger_raw>anchor_open_raw and ema448_raw>trigger_raw:
         structural_rr=(ema448_raw-trigger_raw)/(trigger_raw-anchor_open_raw)
+    current_rr_to_448=np.nan
+    if float(cur.close)>anchor_open_raw and ema448_raw>float(cur.close):
+        current_rr_to_448=(ema448_raw-float(cur.close))/(float(cur.close)-anchor_open_raw)
+    reaccel3_rr_to_448=np.nan
+    if reaccel_trigger_3d>anchor_open_raw and ema448_raw>reaccel_trigger_3d:
+        reaccel3_rr_to_448=(ema448_raw-reaccel_trigger_3d)/(reaccel_trigger_3d-anchor_open_raw)
+    reaccel_1d_before_448=bool(reaccel_trigger_1d<ema448_raw)
+    reaccel_3d_before_448=bool(reaccel_trigger_3d<ema448_raw)
+    reaccel_5d_before_448=bool(reaccel_trigger_5d<ema448_raw)
     long_below=bool(e.below80>=60) if pd.notna(e.below80) else False
     classic_tier=""
     if anchor_alive and long_below and age>=1:
@@ -331,7 +343,10 @@ def classify(z,event_date):
     elif category=="REACCEL_EARLY":
         action_status="EARLY_REACCEL_WATCH"
     elif category=="DANTE_PULLBACK":
-        action_status="WATCH_REACCEL_CONFIRM"
+        if headroom<.05 or not reaccel_1d_before_448:
+            action_status="WATCH_TARGET_TOO_CLOSE"
+        else:
+            action_status="WATCH_REACCEL_CONFIRM"
     elif category=="224_HOLD":
         action_status="WATCH_PULLBACK_CONFIRM"
     elif category=="PRE224_ENERGY":
@@ -353,9 +368,12 @@ def classify(z,event_date):
         "reaccel_trigger_1d":reaccel_trigger_1d,"reaccel_trigger_3d":reaccel_trigger_3d,
         "reaccel_trigger_5d":reaccel_trigger_5d,"reaccel_trigger_close":reaccel_trigger_3d,
         "reaccel_trigger_gap_pct":reaccel_trigger_gap*100 if pd.notna(reaccel_trigger_gap) else np.nan,
+        "reaccel_1d_before_448":reaccel_1d_before_448,"reaccel_3d_before_448":reaccel_3d_before_448,
+        "reaccel_5d_before_448":reaccel_5d_before_448,
         "reaccel_window_days_left":reaccel_window_days_left,
         "anchor_invalidation":anchor_open_raw,
         "structural_rr_to_448":structural_rr,
+        "current_rr_to_448":current_rr_to_448,"reaccel3_rr_to_448":reaccel3_rr_to_448,
         "current_volume_ratio":float(cur.vr) if pd.notna(cur.vr) else np.nan,
         "current_turnover20":float(cur.amount20) if pd.notna(cur.amount20) else np.nan
     }
@@ -479,7 +497,7 @@ def main():
         classic=out[out["classic_tier"].ne("")].copy()
         if not classic.empty:
             print("\n=== CLASSIC_DANTE_CANDIDATES ===")
-            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_window_days_left","reaccel_early","reaccel_confirmed","reaccel_strong","current_close","prior1_high","prior3_high","prior5_high","reaccel_trigger_1d","reaccel_trigger_3d","reaccel_trigger_5d","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
+            print(classic[["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio","pullback_date","days_since_pull","reaccel_window_days_left","reaccel_early","reaccel_confirmed","reaccel_strong","current_close","prior1_high","prior3_high","prior5_high","reaccel_trigger_1d","reaccel_trigger_3d","reaccel_trigger_5d","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now","ema112","ema224","ema448","trigger_224_confirm","anchor_invalidation","structural_rr_to_448","current_rr_to_448","reaccel3_rr_to_448","dist224_pct","gap112224_pct","headroom448_pct","drawdown_from_post_high_pct","volume_cooled","closes_below_anchor","age"]].head(30).to_string(index=False))
         cols=["rank","code","name","exchange","classic_tier","action_status","category","score","event_date","event_ret_pct","event_volume_ratio",
               "pullback_date","days_since_pull","reaccel_window_days_left","reaccel_early","reaccel_confirmed","reaccel_strong","current_close",
               "prior1_high","prior3_high","prior5_high","reaccel_trigger_1d","reaccel_trigger_3d","reaccel_trigger_5d","reaccel_trigger_gap_pct","ema5","ema15","ema5_above15_now",
