@@ -435,7 +435,21 @@ def main():
             "public_224_4month_near10":out[out.public_224_4month_near10].copy(),
         }
         for board_name,board in technique_boards.items():
+            board=board.copy()
+            if board_name=="public_224_4month_near10" and not board.empty:
+                board["abs_dist224_pct"]=pd.to_numeric(board.dist224_pct,errors="coerce").abs()
+                board=board.sort_values(
+                    ["ma_turn_score","public_technique_count","research_proxy_count","support_context_count","abs_dist224_pct","avg_turnover20"],
+                    ascending=[False,False,False,False,True,False],na_position="last"
+                ).reset_index(drop=True)
+            else:
+                board=board.reset_index(drop=True)
+            board["board_rank"]=np.arange(1,len(board)+1)
             board.to_csv(a.out/f"board_{board_name}.csv",index=False,encoding="utf-8-sig")
+            if board_name=="public_224_4month_near10":
+                for _,br in board.head(a.max_charts).iterrows():
+                    if br.code in series:
+                        render(series[br.code],br,a.out/"charts_public_224_4month")
     if not out.empty:
         summary=[]
         signal_cols=[
