@@ -268,6 +268,28 @@ def scan(z,min_turnover):
     # Research proxy inspired by labeled public examples: accumulation burst first, quieter current session.
     sig_accum_cool=bool(pd.notna(max_vr) and max_vr>=2.0 and pd.notna(cur.vr20) and cur.vr20<=1.2)
 
+    # Descriptive state for the direct public EMA224 search context.
+    # This is intentionally a watchlist state, not an entry signal.
+    if public_224_4month_near10:
+        if pd.notna(cur.vr20) and float(cur.vr20)>=2.0:
+            public224_watch_state="EVENT_SPIKE"
+            public224_watch_score=0
+        elif pd.notna(cur.ema112_slope20) and float(cur.ema112_slope20)>0 and sig_accum_cool:
+            public224_watch_state="TURNING_COOLED"
+            public224_watch_score=4
+        elif pd.notna(cur.ema112_slope20) and float(cur.ema112_slope20)>0:
+            public224_watch_state="TURNING"
+            public224_watch_score=3
+        elif sig_accum_cool:
+            public224_watch_state="RAW_COOLED_CONTEXT"
+            public224_watch_score=2
+        else:
+            public224_watch_state="RAW_CONTEXT"
+            public224_watch_score=1
+    else:
+        public224_watch_state=""
+        public224_watch_score=np.nan
+
     conc,conc_level,conc_break,conc_retest=concrete_proxy(z)
 
     technique_flags={
@@ -346,6 +368,11 @@ def scan(z,min_turnover):
         "bowl_near224_10":bowl_near224_10,
         "bowl_below224_80":bowl_below224_80,
         "public_224_4month_near10":public_224_4month_near10,
+        "public224_watch_state":public224_watch_state,
+        "public224_watch_score":public224_watch_score,
+        "public224_entry_evidence":(
+            "SEARCH_DAY_ENTRY_BACKTEST_NEGATIVE" if public_224_4month_near10 else ""
+        ),
         "bowl_public_conditions":bowl_public_conditions,
         "ema5":float(cur.ema5/factor),"ema112":float(cur.ema112/factor),"ema224":float(cur.ema224/factor),"ema448":float(cur.ema448/factor),
         "dist112_pct":float((cur.ac/cur.ema112-1)*100),"dist224_pct":float((cur.ac/cur.ema224-1)*100),"dist448_pct":float((cur.ac/cur.ema448-1)*100),
@@ -439,7 +466,7 @@ def main():
             if board_name=="public_224_4month_near10" and not board.empty:
                 board["abs_dist224_pct"]=pd.to_numeric(board.dist224_pct,errors="coerce").abs()
                 board=board.sort_values(
-                    ["ma_turn_score","public_technique_count","research_proxy_count","support_context_count","abs_dist224_pct","avg_turnover20"],
+                    ["public224_watch_score","public_technique_count","research_proxy_count","support_context_count","abs_dist224_pct","avg_turnover20"],
                     ascending=[False,False,False,False,True,False],na_position="last"
                 ).reset_index(drop=True)
             else:
@@ -469,7 +496,8 @@ def main():
         cols=["rank","rank_group","code","name","exchange","current_close","public_technique_count","public_context_count","research_proxy_count","support_context_count","broad_context_count","confluence_count","ma_turn_quality","signals",
               "share_ma","share_recovery_ratio","share_cycle_mean_ratio","blue_dot_bb35_dist_pct",
               "max_volume_ratio20_last20","current_volume_ratio20","dist112_pct","dist224_pct","dist448_pct",
-              "below224_run_before_recovery","public_224_4month_near10","bowl_public_conditions","long_ma_state","entry_validation"]
+              "below224_run_before_recovery","public_224_4month_near10","public224_watch_state",
+              "public224_entry_evidence","bowl_public_conditions","long_ma_state","entry_validation"]
         print(out[cols].head(40).to_string(index=False))
 
 if __name__=="__main__":
