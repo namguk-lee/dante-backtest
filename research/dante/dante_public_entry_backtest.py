@@ -112,7 +112,7 @@ def per_series(g,min_turnover,cooldown,window):
                 i=ent["entry_i"]
                 rec={
                     "setup_date":z.at[setup_i,"date"],"entry_date":ent["entry_date"],
-                    "code":str(z.at[i,"code"]).zfill(6),"name":z.at[i].get("name",""),
+                    "code":str(z.at[i,"code"]).zfill(6),"name":z.at[i,"name"] if "name" in z.columns else "",
                     "exchange":z.at[i,"exchange"],"technique":tech,"split":split_name(z.at[i,"date"]),
                     "tolerance_pct":tol*100,
                     "entry_lag":ent["entry_lag"],"ref_ma":ent["ref_ma"],"target_ma":ent["target_ma"],
