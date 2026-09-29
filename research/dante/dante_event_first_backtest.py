@@ -58,7 +58,8 @@ def add_event(rows,z,kind,signal_i,event_i,cost):
     if not math.isfinite(entry) or entry<=0:return
     rec={"series_id":z.at[signal_i,"series_id"],"exchange":z.at[signal_i,"exchange"],
          "kind":kind,"event_date":z.at[event_i,"date"],"signal_date":z.at[signal_i,"date"],
-         "entry_date":z.at[entry_i,"date"],"entry":entry,"split":split(z.at[signal_i,"date"])}
+         "entry_date":z.at[entry_i,"date"],"entry":entry,"split":split(z.at[signal_i,"date"]),
+         "event_quality":"CLEAN_BREAKOUT" if (z.at[event_i,"close_pos"]>=.65 and z.at[event_i,"upper_wick"]<=.35) else "WICK_ENERGY"}
     for h in (20,60):
         j=entry_i+h
         if j<len(z):
@@ -72,8 +73,7 @@ def scan_one(g,start,cost):
     rows=[]; cooldown={"E0_EVENT":-999,"E1_BOWL_EVENT":-999,"E2_224_RECOVERY":-999,"E3_CLASSIC_PULLBACK":-999}
     start_i=max(500,int(z.index[z.date>=start][0]) if (z.date>=start).any() else len(z))
     strong_mask=(
-        (z.ret1>=.05) & (z.body>=.035) & (z.vr>=2) & (z.amt20>=5_000_000_000) &
-        (z.close_pos>=.65) & (z.upper_wick<=.35)
+        (z.ret1>=.05) & (z.body>=.035) & (z.vr>=2) & (z.amt20>=5_000_000_000)
     ).fillna(False).to_numpy()
     event_idx=np.flatnonzero(strong_mask)
     event_idx=event_idx[(event_idx>=start_i)&(event_idx<len(z)-62)]
