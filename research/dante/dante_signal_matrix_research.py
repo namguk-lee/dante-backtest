@@ -52,6 +52,8 @@ def features(g):
     z["amount20"]=z.amount.rolling(20,min_periods=20).mean()
     z["ret1"]=z.ac.pct_change(fill_method=None)
     z["body"]=(z.ac-z.ao)/z.ao
+    for n in (112,224,448):
+        z[f"ema{n}_slope20"]=(z[f"ema{n}"]/z[f"ema{n}"].shift(20)-1)*100
     mid=z.ac.rolling(35,min_periods=35).mean()
     sd=z.ac.rolling(35,min_periods=35).std(ddof=0)
     z["bb35_upper2"]=mid+2*sd
@@ -114,6 +116,51 @@ def share_proxy_for_ma(z,ma_n):
     else:c["balance_error"]=np.nan
     return c
 
+def bowl3_structure_proxy(z):
+    """Transparent approximation of the publicly described Bowl 1->2->3 structure.
+
+    Public concept used:
+    - 1: meaningful decline
+    - 2: longer base/accumulation than the decline
+    - 3: recovery toward/through EMA224
+
+    Exact segmentation is not public, so this remains a structure proxy.
+    """
+    if len(z)<520:return {
+        "match":False,"stage":"","decline_days":np.nan,"base_days":np.nan,
+        "decline_pct":np.nan,"trough_date":pd.NaT,"peak_date":pd.NaT
+    }
+    cur=z.iloc[-1]
+    # Search the latest plausible trough in the last ~220 sessions, then the
+    # preceding swing high that started the decline.
+    start=max(0,len(z)-220)
+    tail=z.iloc[start:].copy()
+    trough_i=int(tail.ac.idxmin())
+    if trough_i<=0:return {"match":False,"stage":"","decline_days":np.nan,"base_days":np.nan,"decline_pct":np.nan,"trough_date":pd.NaT,"peak_date":pd.NaT}
+    peak_start=max(0,trough_i-160)
+    pre=z.iloc[peak_start:trough_i+1]
+    if len(pre)<15:return {"match":False,"stage":"","decline_days":np.nan,"base_days":np.nan,"decline_pct":np.nan,"trough_date":pd.NaT,"peak_date":pd.NaT}
+    peak_i=int(pre.ac.idxmax())
+    decline_days=trough_i-peak_i
+    base_days=len(z)-1-trough_i
+    peak=float(z.at[peak_i,"ac"]); trough=float(z.at[trough_i,"ac"])
+    decline_pct=(trough/peak-1)*100 if peak>0 else np.nan
+    if pd.isna(cur.ema224):return {"match":False,"stage":"","decline_days":decline_days,"base_days":base_days,"decline_pct":decline_pct,"trough_date":z.at[trough_i,"date"],"peak_date":z.at[peak_i,"date"]}
+    dist224=(float(cur.ac)/float(cur.ema224)-1)*100
+    stage="RECOVERED_224" if dist224>=0 else ("APPROACH_224" if dist224>=-8 else "")
+    match=bool(
+        decline_days>=10 and pd.notna(decline_pct) and decline_pct<=-20 and
+        base_days>=40 and base_days>=decline_days and
+        float(cur.ac)>=float(cur.ema112) and
+        pd.notna(cur.ema112_slope20) and float(cur.ema112_slope20)>0 and
+        bool(stage)
+    )
+    return {
+        "match":match,"stage":stage if match else "",
+        "decline_days":decline_days,"base_days":base_days,"decline_pct":decline_pct,
+        "trough_date":z.at[trough_i,"date"],"peak_date":z.at[peak_i,"date"]
+    }
+
 def candle_line_distance_pct(line,low,high):
     if pd.isna(line) or line<=0:return np.nan
     if low<=line<=high:return 0.0
@@ -168,6 +215,8 @@ def scan(z,min_turnover):
         pd.notna(cross224) and cross224<=60 and cur.ac>=cur.ema224 and cur.ac<cur.ema448
     )
     sig_reverse112=bool(reverse_long and cur.ac>=cur.ema112 and cur.ac<cur.ema224)
+    bowl=bowl3_structure_proxy(z)
+    sig_bowl3=bool(bowl.get("match"))
 
     # ---------- Research proxies ----------
     share=[]
@@ -192,36 +241,60 @@ def scan(z,min_turnover):
 
     conc,conc_level,conc_break,conc_retest=concrete_proxy(z)
 
-    public_flags={
+    technique_flags={
         "public_256_long":sig_256_long,
         "public_ma_hit_112_224":sig_ma_hit_112_224,
         "public_ma_hit_224_448":sig_ma_hit_224_448,
+        "public_bowl3_structure_proxy":sig_bowl3,
+    }
+    context_flags={
         "public_reverse112_context":sig_reverse112,
     }
     proxy_flags={
         "research_share_1to1_proxy":sig_share,
         "research_blue_dot_bb35_proxy":sig_blue,
         "research_blue_dot_bb35_recent5":sig_blue_recent5,
+    }
+    support_flags={
         "research_accumulation_cool_proxy":sig_accum_cool,
         "research_concrete_proxy":conc,
     }
-    # recent5 blue is contextual and not double-counted with current blue.
-    public_count=sum(public_flags.values())
-    proxy_count=int(sig_share)+int(sig_blue)+int(sig_accum_cool)+int(conc)
-    total=public_count+proxy_count
+    # Do not count correlated context/support proxies as independent public techniques.
+    technique_count=sum(technique_flags.values())
+    context_count=sum(context_flags.values())
+    proxy_count=int(sig_share)+int(sig_blue)
+    support_count=int(sig_accum_cool)+int(conc)
+    total=technique_count+context_count+proxy_count+support_count
     if total<1:return None
 
-    labels=[k.replace("public_","").replace("research_","").replace("_proxy","") for k,v in {**public_flags,**proxy_flags}.items() if v and k!="research_blue_dot_bb35_recent5"]
+    all_flags={**technique_flags,**context_flags,**proxy_flags,**support_flags}
+    labels=[k.replace("public_","").replace("research_","").replace("_proxy","") for k,v in all_flags.items() if v and k!="research_blue_dot_bb35_recent5"]
 
     factor=float(cur.ac/cur.close) if float(cur.close)>0 else 1.0
     return {
         "date":cur.date,"code":str(cur.code).zfill(6),"name":cur.get("name",""),"exchange":cur.exchange,
         "current_close":float(cur.close),"avg_turnover20":float(cur.amount20),
-        **public_flags,**proxy_flags,
-        "public_signal_count":public_count,"research_proxy_count":proxy_count,"confluence_count":total,
+        **technique_flags,**context_flags,**proxy_flags,**support_flags,
+        "public_technique_count":technique_count,
+        "public_context_count":context_count,
+        "public_signal_count":technique_count,
+        "research_proxy_count":proxy_count,
+        "support_context_count":support_count,
+        "confluence_count":total,
         "signals":";".join(labels),"action_status":"RESEARCH_ONLY",
         "reverse_112_224_448":reverse_long,
+        "ema112_slope20_pct":float(cur.ema112_slope20) if pd.notna(cur.ema112_slope20) else np.nan,
+        "ema224_slope20_pct":float(cur.ema224_slope20) if pd.notna(cur.ema224_slope20) else np.nan,
+        "ema448_slope20_pct":float(cur.ema448_slope20) if pd.notna(cur.ema448_slope20) else np.nan,
+        "long_ma_state":(
+            ("112UP" if pd.notna(cur.ema112_slope20) and cur.ema112_slope20>0 else "112DOWN")+";"+
+            ("224UP" if pd.notna(cur.ema224_slope20) and cur.ema224_slope20>0 else "224DOWN")+";"+
+            ("448UP" if pd.notna(cur.ema448_slope20) and cur.ema448_slope20>0 else "448DOWN")
+        ),
         "days_since_5x112":cross5_112,"days_since_price_x112":cross112,"days_since_price_x224":cross224,
+        "bowl3_stage":bowl.get("stage",""),"bowl1_decline_days":bowl.get("decline_days",np.nan),
+        "bowl2_base_days":bowl.get("base_days",np.nan),"bowl1_decline_pct":bowl.get("decline_pct",np.nan),
+        "bowl_peak_date":bowl.get("peak_date",pd.NaT),"bowl_trough_date":bowl.get("trough_date",pd.NaT),
         "ema5":float(cur.ema5/factor),"ema112":float(cur.ema112/factor),"ema224":float(cur.ema224/factor),"ema448":float(cur.ema448/factor),
         "dist112_pct":float((cur.ac/cur.ema112-1)*100),"dist224_pct":float((cur.ac/cur.ema224-1)*100),"dist448_pct":float((cur.ac/cur.ema448-1)*100),
         "current_volume_ratio20":float(cur.vr20) if pd.notna(cur.vr20) else np.nan,
@@ -243,14 +316,17 @@ def render(z,r,out_dir):
     x=np.arange(len(t))
     fig,(ax,av)=plt.subplots(2,1,figsize=(15,9),sharex=True,gridspec_kw={"height_ratios":[4,1]})
     ax.plot(x,t.ac/factor,label="Close",linewidth=1.0)
-    for n in (112,224,448):
-        ax.plot(x,t[f"ema{n}"]/factor,label=f"EMA{n}",linewidth=1.25)
+    for n in (5,15,33,56,112,224,448):
+        lw=1.25 if n in (112,224,448) else .75
+        ax.plot(x,t[f"ema{n}"]/factor,label=f"EMA{n}",linewidth=lw,alpha=.9)
     ax.plot(x,t.bb35_upper2/factor,label="BB35x2 proxy",linewidth=.9,linestyle="--")
     if pd.notna(r.get("concrete_level")):
         ax.axhline(float(r["concrete_level"]),linestyle=":",linewidth=.9,label="Concrete proxy")
     av.bar(x,t.volume)
     av.plot(x,t.v20,linewidth=.8,label="V20")
-    title=f'{r["code"]} | confluence {int(r["confluence_count"])} | public {int(r["public_signal_count"])} proxy {int(r["research_proxy_count"])}'
+    title=(f'{r["code"]} | techniques {int(r["public_technique_count"])} | '
+           f'context {int(r["public_context_count"])} | proxy {int(r["research_proxy_count"])} | '
+           f'support {int(r["support_context_count"])}')
     ax.set_title(title)
     ax.text(.01,.98,r["signals"],transform=ax.transAxes,va="top",fontsize=8)
     ax.legend(ncol=5,fontsize=8); ax.grid(alpha=.15); av.grid(alpha=.15)
@@ -273,18 +349,26 @@ def main():
             rows.append(r); series[r["code"]]=z
     out=pd.DataFrame(rows)
     if not out.empty:
+        out["rank_group"]=np.select(
+            [out.public_technique_count>=2,out.public_technique_count==1],
+            ["PUBLIC_MULTI","PUBLIC_SINGLE"],default="PROXY_ONLY"
+        )
         out=out.sort_values(
-            ["confluence_count","public_signal_count","research_proxy_count","share_balance_error","avg_turnover20"],
-            ascending=[False,False,False,True,False],na_position="last"
+            ["public_technique_count","public_context_count","research_proxy_count","support_context_count","share_balance_error","avg_turnover20"],
+            ascending=[False,False,False,False,True,False],na_position="last"
         ).reset_index(drop=True)
         out["rank"]=np.arange(1,len(out)+1)
     out.to_csv(a.out/"signal_matrix_all.csv",index=False,encoding="utf-8-sig")
     focus=out[out.confluence_count>=2].copy() if not out.empty else out.copy()
     focus.to_csv(a.out/"signal_matrix_confluence2plus.csv",index=False,encoding="utf-8-sig")
+    public_focus=out[out.public_technique_count>=1].copy() if not out.empty else out.copy()
+    public_focus.to_csv(a.out/"signal_matrix_public_focus.csv",index=False,encoding="utf-8-sig")
+    proxy_only=out[out.public_technique_count.eq(0)].copy() if not out.empty else out.copy()
+    proxy_only.to_csv(a.out/"signal_matrix_proxy_only.csv",index=False,encoding="utf-8-sig")
     if not out.empty:
         summary=[]
         signal_cols=[
-            "public_256_long","public_ma_hit_112_224","public_ma_hit_224_448","public_reverse112_context",
+            "public_256_long","public_ma_hit_112_224","public_ma_hit_224_448","public_bowl3_structure_proxy","public_reverse112_context",
             "research_share_1to1_proxy","research_blue_dot_bb35_proxy",
             "research_accumulation_cool_proxy","research_concrete_proxy"
         ]
@@ -292,11 +376,12 @@ def main():
         for n,cnt in out.confluence_count.value_counts().sort_index().items():
             summary.append({"signal":f"confluence_{int(n)}","count":int(cnt)})
         pd.DataFrame(summary).to_csv(a.out/"signal_matrix_summary.csv",index=False,encoding="utf-8-sig")
-        for _,r in out.head(a.max_charts).iterrows():
+        chart_source=public_focus if not public_focus.empty else out
+        for _,r in chart_source.head(a.max_charts).iterrows():
             render(series[r.code],r,a.out/"charts")
-    print(f"latest={latest.date()} matrix_any={len(out)} confluence2plus={len(focus)}")
+    print(f"latest={latest.date()} matrix_any={len(out)} confluence2plus={len(focus)} public_focus={len(public_focus) if not out.empty else 0}")
     if not out.empty:
-        cols=["rank","code","name","exchange","current_close","confluence_count","public_signal_count","research_proxy_count","signals",
+        cols=["rank","rank_group","code","name","exchange","current_close","public_technique_count","public_context_count","research_proxy_count","support_context_count","confluence_count","signals",
               "share_ma","share_recovery_ratio","share_cycle_mean_ratio","blue_dot_bb35_dist_pct",
               "max_volume_ratio20_last20","current_volume_ratio20","dist112_pct","dist224_pct","dist448_pct"]
         print(out[cols].head(40).to_string(index=False))
