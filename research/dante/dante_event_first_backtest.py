@@ -121,7 +121,13 @@ def scan_one(g,start,cost):
 
 def summarize(ev):
     out=[]
-    regimes=[("ALL",ev),("BREADTH50",ev[ev.breadth20>=.50]),("BREADTH60",ev[ev.breadth20>=.60])]
+    regimes=[
+        ("ALL",ev),
+        ("BREADTH20_50",ev[ev.breadth20>=.50]),
+        ("BREADTH20_60",ev[ev.breadth20>=.60]),
+        ("BOTH50",ev[(ev.breadth20>=.50)&(ev.breadth60>=.50)]),
+        ("BOTH60",ev[(ev.breadth20>=.60)&(ev.breadth60>=.60)]),
+    ]
     for regime,base in regimes:
         for (sp,k),q in base.groupby(["split","kind"],dropna=False):
             rec={"regime":regime,"split":sp,"kind":k,"n":len(q)}
@@ -162,11 +168,14 @@ def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
     panel=panel.sort_values(["series_id","date"]).reset_index(drop=True)
-    panel["mret20"]=panel.groupby("series_id",sort=False)["adjusted_close"].pct_change(20,fill_method=None)
-    b=panel.dropna(subset=["mret20"]).copy()
+    gret=panel.groupby("series_id",sort=False)["adjusted_close"]
+    panel["mret20"]=gret.pct_change(20,fill_method=None)
+    panel["mret60"]=gret.pct_change(60,fill_method=None)
+    b=panel.dropna(subset=["mret20","mret60"]).copy()
     b["up20"]=(b["mret20"]>0).astype(float)
-    breadth=(b.groupby(["exchange","date"],as_index=False)["up20"].mean()
-               .rename(columns={"date":"signal_date","up20":"breadth20"}))
+    b["up60"]=(b["mret60"]>0).astype(float)
+    breadth=(b.groupby(["exchange","date"],as_index=False)[["up20","up60"]].mean()
+               .rename(columns={"date":"signal_date","up20":"breadth20","up60":"breadth60"}))
     start=pd.Timestamp(a.start); cost=a.cost_bps/10000.0
     rows=[]; total=panel.series_id.nunique()
     for n,(sid,g) in enumerate(panel.groupby("series_id",sort=False),1):
