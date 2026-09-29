@@ -84,6 +84,13 @@ def add_event(rows,z,i,tech):
         "ema224_slope20_pct":float(cur.ema224_slope20) if pd.notna(cur.ema224_slope20) else np.nan,
         "ema448_slope20_pct":float(cur.ema448_slope20) if pd.notna(cur.ema448_slope20) else np.nan,
         "ma_turn_quality":"TURNED_UP" if pd.notna(cur.ema112_slope20) and cur.ema112_slope20>0 else "NOT_TURNED",
+        "current_volume_ratio20":float(cur.vr20) if pd.notna(cur.vr20) else np.nan,
+        "max_volume_ratio20_last20":float(z.iloc[max(0,i-19):i+1].vr20.max()) if z.iloc[max(0,i-19):i+1].vr20.notna().any() else np.nan,
+        "accum_cool":bool(
+            pd.notna(cur.vr20) and cur.vr20<=1.2 and
+            z.iloc[max(0,i-19):i+1].vr20.notna().any() and
+            float(z.iloc[max(0,i-19):i+1].vr20.max())>=2.0
+        ),
         "dist112_pct":float((cur.ac/cur.ema112-1)*100) if pd.notna(cur.ema112) else np.nan,
         "dist224_pct":float((cur.ac/cur.ema224-1)*100) if pd.notna(cur.ema224) else np.nan,
         "dist448_pct":float((cur.ac/cur.ema448-1)*100) if pd.notna(cur.ema448) else np.nan,
@@ -160,6 +167,41 @@ def summarize(events):
         rows.append(rec)
     return pd.DataFrame(rows)
 
+def summarize_evidence_filter(events):
+    """Primary non-mined filter from the dated official-example study.
+
+    Evidence observed before this backtest:
+    - >=2x volume burst within prior 20 sessions
+    - quieter signal/current session (<=1.2x 20d average)
+    """
+    rows=[]
+    variants=(
+        ("BASE",pd.Series(True,index=events.index)),
+        ("TURNED_UP",events.ma_turn_quality.eq("TURNED_UP")),
+        ("ACCUM_COOL",events.accum_cool.eq(True)),
+        ("TURNED_UP_ACCUM_COOL",events.ma_turn_quality.eq("TURNED_UP")&events.accum_cool.eq(True)),
+    )
+    for tech in TECHS:
+        for split in ("TRAIN_2021_2023","VALID_2024_2025","TEST_2026","ALL"):
+            base=events[events.technique.eq(tech)]
+            if split!="ALL":base=base[base.split.eq(split)]
+            for variant,mask in variants:
+                q=base[mask.reindex(base.index,fill_value=False)]
+                if q.empty:continue
+                rec={"technique":tech,"split":split,"variant":variant,"events":len(q)}
+                for h in (5,20,60):
+                    v=pd.to_numeric(q[f"ret{h}_net50bp_pct"],errors="coerce").dropna()
+                    rec[f"n{h}"]=len(v)
+                    rec[f"mean{h}_net_pct"]=float(v.mean()) if len(v) else np.nan
+                    rec[f"median{h}_net_pct"]=float(v.median()) if len(v) else np.nan
+                    rec[f"win{h}_pct"]=float((v>0).mean()*100) if len(v) else np.nan
+                    mae=pd.to_numeric(q.loc[v.index,f"mae{h}_pct"],errors="coerce").dropna() if len(v) else pd.Series(dtype=float)
+                    mfe=pd.to_numeric(q.loc[v.index,f"mfe{h}_pct"],errors="coerce").dropna() if len(v) else pd.Series(dtype=float)
+                    rec[f"median_mae{h}_pct"]=float(mae.median()) if len(mae) else np.nan
+                    rec[f"median_mfe{h}_pct"]=float(mfe.median()) if len(mfe) else np.nan
+                rows.append(rec)
+    return pd.DataFrame(rows)
+
 def main():
     a=args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -173,9 +215,14 @@ def main():
         print("no events"); return
     summary=summarize(events)
     summary.to_csv(a.out/"public_technique_summary.csv",index=False,encoding="utf-8-sig")
+    filt=summarize_evidence_filter(events)
+    filt.to_csv(a.out/"public_technique_filter_summary.csv",index=False,encoding="utf-8-sig")
     print(f"events={len(events)} series={events.code.nunique()}")
     show=summary[summary.turn_quality.eq("ALL")]
     print(show.to_string(index=False))
+    print("\n=== PRE-REGISTERED EVIDENCE FILTER ===")
+    key=filt[filt.variant.isin(["BASE","TURNED_UP_ACCUM_COOL"])]
+    print(key.to_string(index=False))
 
 if __name__=="__main__":
     main()
