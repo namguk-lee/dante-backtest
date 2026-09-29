@@ -144,10 +144,21 @@ def summarize_yearly(ev):
     if ev.empty:return pd.DataFrame()
     x=ev.copy()
     x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
+    x["breadth20_bin"]=pd.cut(
+        x["breadth20"],
+        bins=[-np.inf,.40,.50,.60,np.inf],
+        labels=["LT40","40_50","50_60","GE60"],
+        right=False,
+    )
     groups=[
         ("YEAR_ALL",["year","kind"]),
         ("YEAR_EXCHANGE",["year","exchange","kind"]),
         ("YEAR_QUALITY",["year","event_quality","kind"]),
+        ("YEAR_EXCHANGE_QUALITY",["year","exchange","event_quality","kind"]),
+        ("YEAR_BREADTH20",["year","breadth20_bin","kind"]),
+        ("SPLIT_EXCHANGE",["split","exchange","kind"]),
+        ("SPLIT_QUALITY",["split","event_quality","kind"]),
+        ("SPLIT_EXCHANGE_QUALITY",["split","exchange","event_quality","kind"]),
     ]
     for view,keys in groups:
         for vals,q in x.groupby(keys,dropna=False):
@@ -161,6 +172,38 @@ def summarize_yearly(ev):
                 rec[f"mean{h}"]=s.mean() if len(s) else np.nan
                 rec[f"median{h}"]=s.median() if len(s) else np.nan
                 rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            out.append(rec)
+    return pd.DataFrame(out)
+
+
+def summarize_robustness(ev):
+    """Diagnose regime dependence and winner concentration for E2/E3."""
+    out=[]
+    if ev.empty:return pd.DataFrame()
+    x=ev[ev["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK"])].copy()
+    x["year"]=pd.to_datetime(x["signal_date"],errors="coerce").dt.year
+    groups=[
+        ("SPLIT",["split","kind"]),
+        ("YEAR",["year","kind"]),
+        ("YEAR_EXCHANGE",["year","exchange","kind"]),
+        ("YEAR_QUALITY",["year","event_quality","kind"]),
+        ("YEAR_EXCHANGE_QUALITY",["year","exchange","event_quality","kind"]),
+    ]
+    for view,keys in groups:
+        for vals,q in x.groupby(keys,dropna=False,observed=True):
+            if not isinstance(vals,tuple):vals=(vals,)
+            rec={"view":view}
+            for k,v in zip(keys,vals):rec[k]=v
+            rec["n"]=len(q)
+            for h in (20,60):
+                s=q[f"ret{h}"].dropna().sort_values(ascending=False)
+                rec[f"n{h}"]=len(s)
+                rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+                rec[f"median{h}"]=s.median() if len(s) else np.nan
+                rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+                rec[f"max{h}"]=s.iloc[0] if len(s) else np.nan
+                rec[f"mean{h}_ex_top1"]=s.iloc[1:].mean() if len(s)>1 else np.nan
+                rec[f"mean{h}_ex_top3"]=s.iloc[3:].mean() if len(s)>3 else np.nan
             out.append(rec)
     return pd.DataFrame(out)
 
@@ -190,10 +233,25 @@ def main():
     sm.to_csv(a.out/"event_first_summary.csv",index=False,encoding="utf-8-sig")
     yr=summarize_yearly(ev)
     yr.to_csv(a.out/"event_first_yearly.csv",index=False,encoding="utf-8-sig")
+    rb=summarize_robustness(ev)
+    rb.to_csv(a.out/"event_first_robustness.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
         for c in ["mean20","median20","win20","mean60","median60","win60"]:
             if c in show:show[c]=(show[c]*100).round(2)
         print(show.to_string(index=False))
+    if not yr.empty:
+        focus=yr[(yr["view"]=="YEAR_ALL") & (yr["kind"].isin(["E2_224_RECOVERY","E3_CLASSIC_PULLBACK"]))].copy()
+        for c in ["mean20","median20","win20","mean60","median60","win60"]:
+            if c in focus:focus[c]=(focus[c]*100).round(2)
+        print("\n=== E2/E3 YEARLY DIAGNOSTIC (%) ===")
+        print(focus.to_string(index=False))
+    if not rb.empty:
+        focus=rb[(rb["view"]=="SPLIT") & (rb["kind"]=="E3_CLASSIC_PULLBACK")].copy()
+        for c in ["mean20","median20","win20","max20","mean20_ex_top1","mean20_ex_top3",
+                  "mean60","median60","win60","max60","mean60_ex_top1","mean60_ex_top3"]:
+            if c in focus:focus[c]=(focus[c]*100).round(2)
+        print("\n=== E3 ROBUSTNESS / WINNER CONCENTRATION (%) ===")
+        print(focus.to_string(index=False))
 if __name__=="__main__":main()
