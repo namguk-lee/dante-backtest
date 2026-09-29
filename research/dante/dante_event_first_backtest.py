@@ -331,6 +331,8 @@ def scan_one(g,start,cost):
                 "headroom224_signal":float(z.at[cross112_i,"ema224"]/z.at[cross112_i,"ac"]-1) if z.at[cross112_i,"ac"]>0 else np.nan,
                 "ema112_slope20_at_signal":float(z.at[cross112_i,"ema112_slope20"]) if pd.notna(z.at[cross112_i,"ema112_slope20"]) else np.nan,
                 "anchor_price_adj":anchor,
+                "event_prior20_high":float(r.prior20_high) if pd.notna(r.prior20_high) else np.nan,
+                "event_hill_break20":bool(r.event_breakout20),
                 "target224_signal":float(z.at[cross112_i,"ema224"]) if pd.notna(z.at[cross112_i,"ema224"]) else np.nan,
             }
             if cross112_i-cooldown["E112_RECOVERY"]>=40:
@@ -388,6 +390,11 @@ def scan_one(g,start,cost):
                         "ema112_slope20_at_signal":float(z.at[pull112_i,"ema112_slope20"]) if pd.notna(z.at[pull112_i,"ema112_slope20"]) else np.nan,
                         "pull112_drawdown":float(z.at[pull112_i,"ac"]/post_high-1) if post_high>0 else np.nan,
                         "pull112_volume_event_ratio":float(z.at[pull112_i,"volume"]/event_vol) if event_vol>0 else np.nan,
+                        "concrete_level_hold":bool(
+                            pd.notna(r.prior20_high) and float(z.at[pull112_i,"ac"])>=float(r.prior20_high)
+                        ),
+                        "concrete_level_margin":float(z.at[pull112_i,"ac"]/r.prior20_high-1)
+                            if pd.notna(r.prior20_high) and float(r.prior20_high)>0 else np.nan,
                         "target224_signal":float(z.at[pull112_i,"ema224"]),
                     })
                     if pull112_i-cooldown["E112_PULLBACK"]>=40:
@@ -946,6 +953,58 @@ def summarize_public_112_rr(ev):
         out.append(rec)
     return pd.DataFrame(out)
 
+def summarize_public_112_concrete_proxy(ev):
+    """Transparent proxy for the public concrete pattern around the E112 branch.
+
+    Public teaching says the 'concrete' floor is formed when price breaks the
+    immediately preceding hill; one common form is breakout -> pullback -> go.
+    We do not know the proprietary hill detector, so this diagnostic uses the
+    event's prior 20-session high as a fixed, auditable hill proxy.
+    """
+    if ev.empty:return pd.DataFrame()
+    x=ev[ev["kind"].isin(["E112_RECOVERY","E112_SETTLED2","E112_PULLBACK"])].copy()
+    if x.empty:return pd.DataFrame()
+    hill=x["event_hill_break20"].fillna(False).astype(bool)
+    hold=x.get("concrete_level_hold",pd.Series(False,index=x.index)).fillna(False).astype(bool)
+    x["concrete_proxy_state"]=np.select(
+        [
+            hill & hold & x["kind"].eq("E112_PULLBACK"),
+            hill,
+        ],
+        [
+            "HILL_BREAK20_AND_PULLBACK_HOLD",
+            "HILL_BREAK20",
+        ],
+        default="NO_HILL_BREAK20",
+    )
+    out=[]
+    for (sp,kind,state),q in x.groupby(
+        ["split","kind","concrete_proxy_state"],dropna=False,observed=True
+    ):
+        rec={
+            "split":sp,"kind":kind,"state":state,"n":len(q),
+            "median_concrete_margin":pd.to_numeric(q.get("concrete_level_margin"),errors="coerce").median(),
+            "median_support112_rr":pd.to_numeric(q["support112_structural_rr"],errors="coerce").median(),
+        }
+        for h in (20,60):
+            s=pd.to_numeric(q[f"ret{h}"],errors="coerce").dropna()
+            rec[f"n{h}"]=len(s)
+            rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+            rec[f"median{h}"]=s.median() if len(s) else np.nan
+            rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+            full=q[(q[f"support112{h}_valid"]==True)&(q[f"support112{h}_full_horizon"]==True)].copy()
+            if len(full):
+                outcome=full[f"support112{h}_outcome"].astype(str)
+                rec[f"target{h}"]=(outcome=="TARGET").mean()
+                rec[f"stop{h}"]=outcome.str.startswith("STOP").mean()
+                rec[f"pathmean{h}"]=full[f"support112{h}_net_return"].mean()
+                rec[f"pathmedian{h}"]=full[f"support112{h}_net_return"].median()
+            else:
+                rec[f"target{h}"]=np.nan; rec[f"stop{h}"]=np.nan
+                rec[f"pathmean{h}"]=np.nan; rec[f"pathmedian{h}"]=np.nan
+        out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -1001,6 +1060,8 @@ def main():
     entry112.to_csv(a.out/"event_first_public_112_entry_path.csv",index=False,encoding="utf-8-sig")
     rr112=summarize_public_112_rr(ev)
     rr112.to_csv(a.out/"event_first_public_112_rr.csv",index=False,encoding="utf-8-sig")
+    concrete112=summarize_public_112_concrete_proxy(ev)
+    concrete112.to_csv(a.out/"event_first_public_112_concrete_proxy.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -1085,5 +1146,15 @@ def main():
         if "median_support112_rr" in show:
             show["median_support112_rr"]=show["median_support112_rr"].round(2)
         print("\n=== E112 TRANSPARENT STRUCTURAL R:R >= 1 DIAGNOSTIC (%) ===")
+        print(show.to_string(index=False))
+    if not concrete112.empty:
+        show=concrete112.copy()
+        for c in ["median_concrete_margin","mean20","median20","win20","target20","stop20",
+                  "pathmean20","pathmedian20","mean60","median60","win60","target60",
+                  "stop60","pathmean60","pathmedian60"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        if "median_support112_rr" in show:
+            show["median_support112_rr"]=show["median_support112_rr"].round(2)
+        print("\n=== E112 PUBLIC CONCRETE PROXY: PRIOR-20D-HILL BREAK/HOLD (%) ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
