@@ -432,8 +432,8 @@ def summarize_structure(ev):
     ]
     out=[]
     for view,col in dimensions:
-        for (sp,kind,bucket),q in x.groupby(["split","kind",col],dropna=False,observed=True):
-            rec={"view":view,"bucket":bucket,"split":sp,"kind":kind,"n":len(q)}
+        for (sp,bucket),q in x.groupby(["split",col],dropna=False,observed=True):
+            rec={"view":view,"bucket":bucket,"split":sp,"n":len(q)}
             for h in (20,60):
                 s=q[f"ret{h}"].dropna()
                 rec[f"n{h}"]=len(s)
@@ -568,8 +568,8 @@ def summarize_e4_confirmation(ev):
     ]
     out=[]
     for view,col in dimensions:
-        for (sp,bucket),q in x.groupby(["split",col],dropna=False,observed=True):
-            rec={"view":view,"bucket":bucket,"split":sp,"n":len(q)}
+        for (sp,kind,bucket),q in x.groupby(["split","kind",col],dropna=False,observed=True):
+            rec={"view":view,"bucket":bucket,"split":sp,"kind":kind,"n":len(q)}
             for h in (20,60):
                 s=q[f"ret{h}"].dropna()
                 rec[f"n{h}"]=len(s)
