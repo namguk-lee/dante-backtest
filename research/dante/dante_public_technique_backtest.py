@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from dante_signal_matrix_research import load, features, candle_line_distance_pct
 
-TECHS=("256_LONG","MA_HIT_112_224","MA_HIT_224_448","BOWL3_STRUCTURE","PUBLIC_224_4MONTH_NEAR10","PUBLIC_CONFLUENCE_2PLUS")
+TECHS=("256_LONG","MA_HIT_112_224","MA_HIT_224_448","BOWL3_STRUCTURE","PUBLIC_224_4MONTH_NEAR10","PUBLIC_CONFLUENCE_2PLUS","PUBLIC_112_224_TURN")
 
 def args():
     p=argparse.ArgumentParser()
@@ -191,6 +191,15 @@ def per_series(g,min_turnover,cooldown):
     }
     stack=pd.DataFrame({k:v.astype(int) for k,v in masks.items()})
     masks["PUBLIC_CONFLUENCE_2PLUS"]=liq&(stack.sum(axis=1)>=2)
+
+    # Official public "upward departure" context: EMA112 changes from below
+    # EMA224 to above it. Keep this as a separate, later-stage technique so it
+    # does not erase the earlier reverse-MA / E3-E4 research stages.
+    turn112224=(
+        (z.ema112>=z.ema224)&
+        (z.ema112.shift(1)<z.ema224.shift(1))
+    )
+    masks["PUBLIC_112_224_TURN"]=liq&turn112224
 
     rows=[]
     for tech,mask in masks.items():
