@@ -61,8 +61,9 @@ def feat(g):
     rng=(g.ah-g.al).replace(0,np.nan)
     g["close_pos"]=(g.ac-g.al)/rng
     g["upper_wick"]=(g.ah-np.maximum(g.ao,g.ac))/rng
-    g["ema112_slope20"]=g.ema112/g.ema112.shift(20)-1
-    g["ema224_slope20"]=g.ema224/g.ema224.shift(20)-1
+    for n in (33,56,112,224,448):
+        g[f"ema{n}_slope10"]=g[f"ema{n}"]/g[f"ema{n}"].shift(10)-1
+        g[f"ema{n}_slope20"]=g[f"ema{n}"]/g[f"ema{n}"].shift(20)-1
     g["cross112"]=(g.ac>g.ema112)&(g.ac.shift(1)<=g.ema112.shift(1))
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
@@ -243,6 +244,23 @@ def classify_one(g,min_turnover):
     recent112=z.iloc[max(bowl["bottom_i"],len(z)-100):]
     had112=bool(recent112.cross112.any() or (recent112.ac>recent112.ema112).any())
     ema112_rising=bool(pd.notna(cur.ema112_slope20) and cur.ema112_slope20>0)
+    gap112224=float(cur.ema112/cur.ema224-1) if pd.notna(cur.ema112) and pd.notna(cur.ema224) else np.nan
+    short_mid_turn=bool(
+        pd.notna(cur.ema33_slope20) and pd.notna(cur.ema56_slope20) and
+        cur.ema33_slope20>0 and cur.ema56_slope20>0 and ema112_rising
+    )
+    ema224_rising20=bool(pd.notna(cur.ema224_slope20) and cur.ema224_slope20>0)
+    ema224_turning10=bool(pd.notna(cur.ema224_slope10) and cur.ema224_slope10>0)
+    ma_turn_confirmed=bool(short_mid_turn and ema224_rising20 and abs(gap112224)<=.08)
+    ma_turn_early=bool(
+        short_mid_turn and (not ema224_rising20) and ema224_turning10 and
+        pd.notna(cur.ema224_slope20) and cur.ema224_slope20>=-.01 and abs(gap112224)<=.12
+    )
+    ma_state=(
+        "MA_TURN_CONFIRMED" if ma_turn_confirmed
+        else "MA_TURN_EARLY" if ma_turn_early
+        else "MA_DOWN_OR_WIDE"
+    )
 
     if -.10<=dist224<0 and had112:
         state="BOWL3_PRE224"
@@ -277,11 +295,12 @@ def classify_one(g,min_turnover):
     score+=12 if concrete_strict else 7 if concrete_loose else 0
     score+=8 if had112 else 0
     score+=4 if ema112_rising else 0
+    score+=12 if ma_turn_confirmed else 6 if ma_turn_early else 0
     score+=4 if near224 else 0
 
-    if all([bowl_duration_ok,four_month_ok,big_decline,base_reasonable,anchor_strict,concrete_loose,had112,ema112_rising,near224]):
+    if all([bowl_duration_ok,four_month_ok,big_decline,base_reasonable,anchor_strict,concrete_loose,had112,near224,ma_turn_confirmed]):
         tier="A"
-    elif all([bowl_duration_ok,four_month_ok,base_reasonable,anchor_strict,had112,ema112_rising,near224]):
+    elif all([bowl_duration_ok,four_month_ok,base_reasonable,anchor_strict,had112,near224,ma_turn_early]):
         tier="B"
     else:
         tier="NEAR"
@@ -301,8 +320,15 @@ def classify_one(g,min_turnover):
         "date":cur.date,"tier":tier,"state":state,"score":round(score,2),"current_close":cur_price,
         **{f"ema{n}":ema[n] for n in (5,15,33,56,112,224,448)},
         "dist112_pct":dist112*100,"dist224_pct":dist224*100,
+        "gap112224_pct":gap112224*100 if pd.notna(gap112224) else np.nan,
+        "ma_state":ma_state,"ma_turn_confirmed":ma_turn_confirmed,"ma_turn_early":ma_turn_early,
+        "ema33_slope20_pct":float(cur.ema33_slope20*100) if pd.notna(cur.ema33_slope20) else np.nan,
+        "ema56_slope20_pct":float(cur.ema56_slope20*100) if pd.notna(cur.ema56_slope20) else np.nan,
+        "ema112_slope10_pct":float(cur.ema112_slope10*100) if pd.notna(cur.ema112_slope10) else np.nan,
         "ema112_slope20_pct":float(cur.ema112_slope20*100) if pd.notna(cur.ema112_slope20) else np.nan,
+        "ema224_slope10_pct":float(cur.ema224_slope10*100) if pd.notna(cur.ema224_slope10) else np.nan,
         "ema224_slope20_pct":float(cur.ema224_slope20*100) if pd.notna(cur.ema224_slope20) else np.nan,
+        "ema448_slope20_pct":float(cur.ema448_slope20*100) if pd.notna(cur.ema448_slope20) else np.nan,
         "bowl1_peak_date":z.at[bowl["peak_i"],"date"],"bowl_bottom_date":z.at[bowl["bottom_i"],"date"],
         "bowl2_start_date":z.at[bowl["base_start_i"],"date"],"bowl2_core_end_date":z.at[bowl["core_end_i"],"date"],
         "bowl3_approach_date":z.at[bowl["approach_i"],"date"],
@@ -421,15 +447,17 @@ def render_chart(z,rec,out_dir,bars=280):
     if ticks[-1]!=len(t)-1:ticks.append(len(t)-1)
     av.set_xticks(ticks)
     av.set_xticklabels([pd.Timestamp(t.at[i,"date"]).strftime("%Y-%m-%d") for i in ticks],rotation=25,ha="right")
-    ax.set_title(f'{rec["code"]} | DANTE_CLASSIC_V1 {rec["tier"]} | {rec["action_status"]} | {rec["state"]} | score {rec["score"]:.0f}')
+    ax.set_title(f'{rec["code"]} | DANTE_CLASSIC_V2 {rec["tier"]} | {rec["action_status"]} | {rec["state"]} | {rec["ma_state"]} | score {rec["score"]:.0f}')
     note=(f'Bowl1 {rec["bowl1_days"]}d / Bowl2 {rec["bowl2_days"]}d (x{rec["bowl2_over_bowl1"]:.2f}) | '
           f'core {rec["bowl2_core_days"]}d range {rec["bowl2_core_range_pct"]:.1f}% net {rec["bowl2_core_net_change_pct"]:.1f}% | '
           f'below224 {rec["below224_days_before_approach"]}d | anchor vol x{rec["anchor_volume_ratio"]:.1f}, '
-          f'closes below open {rec["anchor_closes_below"]} | concrete strict={rec["concrete_hold_strict"]}')
+          f'closes below open {rec["anchor_closes_below"]} | concrete strict={rec["concrete_hold_strict"]} | '
+          f'MA slopes 33/56/112/224/448 = {rec["ema33_slope20_pct"]:.1f}/{rec["ema56_slope20_pct"]:.1f}/{rec["ema112_slope20_pct"]:.1f}/{rec["ema224_slope20_pct"]:.1f}/{rec["ema448_slope20_pct"]:.1f}% | '
+          f'112-224 gap {rec["gap112224_pct"]:.1f}%')
     fig.text(.01,.01,note,fontsize=8)
     fig.tight_layout(rect=[0,.035,1,1])
     out_dir.mkdir(parents=True,exist_ok=True)
-    path=out_dir/f'{rec["code"]}_DANTE_CLASSIC_V1.png'
+    path=out_dir/f'{rec["code"]}_DANTE_CLASSIC_V2.png'
     fig.savefig(path,dpi=150); plt.close(fig)
     return path
 
@@ -494,12 +522,14 @@ def main():
     for _,r in selected.iterrows():
         render_chart(chart_map[r.series_id],r.to_dict(),chart_dir)
 
-    print("\n=== DANTE_CLASSIC_V1 TOP ===")
+    print("\n=== DANTE_CLASSIC_V2 TOP ===")
     showcols=["rank","code","name","exchange","tier","action_status","state","score","current_close",
               "bowl1_days","bowl2_days","bowl2_core_days","bowl2_over_bowl1",
               "bowl2_core_range_pct","bowl2_core_net_change_pct","below224_days_before_approach",
               "anchor_date","anchor_volume_ratio","anchor_closes_below","concrete_hold_strict",
-              "dist224_pct","ema112_slope20_pct","target_type","target_price","target_upside_pct"]
+              "dist224_pct","gap112224_pct","ma_state","ema33_slope20_pct","ema56_slope20_pct",
+              "ema112_slope20_pct","ema224_slope10_pct","ema224_slope20_pct","ema448_slope20_pct",
+              "target_type","target_price","target_upside_pct"]
     print(out[showcols].head(30).to_string(index=False))
 
 if __name__=="__main__":
