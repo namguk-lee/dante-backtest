@@ -151,6 +151,52 @@ def simulate_close_stop(z,entry_i,entry,stop,target,horizon,cost,prefix):
     out[p+"r_multiple"]=float(net_ret/risk_pct) if risk_pct>0 else np.nan
     return out
 
+def public_bowl_duration_context(z,i):
+    """Transparent Bowl-1/Bowl-2 duration diagnostic mirroring the public Bowl-3 proxy.
+
+    This is diagnostic context only, never an entry rule:
+    - look back up to 220 sessions from the signal
+    - locate the lowest adjusted close (candidate end of Bowl-1 / start of Bowl-2)
+    - locate the preceding peak within up to 160 sessions
+    - compare decline duration (Bowl-1 proxy) with base duration (Bowl-2 proxy)
+    - public duration condition: Bowl-2 >= Bowl-1, with the same minimum-shape
+      guards already used by bowl_mask (decline >=10d and <=-20%, base >=40d)
+    """
+    out={
+        "bowl_decline_days":np.nan,
+        "bowl_base_days":np.nan,
+        "bowl_base_to_decline_ratio":np.nan,
+        "bowl_decline_pct":np.nan,
+        "public_bowl_duration_ok":False,
+    }
+    if i<1:return out
+    start=max(0,i-219)
+    tail=z.iloc[start:i+1]
+    if tail.empty or not tail.ac.notna().any():return out
+    trough_i=int(tail.ac.idxmin())
+    if trough_i<=0:return out
+    peak_start=max(0,trough_i-160)
+    prepeak=z.iloc[peak_start:trough_i+1]
+    if len(prepeak)<15 or not prepeak.ac.notna().any():return out
+    peak_i=int(prepeak.ac.idxmax())
+    decline_days=int(trough_i-peak_i)
+    base_days=int(i-trough_i)
+    peak=float(z.at[peak_i,"ac"]); trough=float(z.at[trough_i,"ac"])
+    decline_pct=float(trough/peak-1) if peak>0 else np.nan
+    ratio=float(base_days/decline_days) if decline_days>0 else np.nan
+    ok=bool(
+        decline_days>=10 and math.isfinite(decline_pct) and decline_pct<=-.20 and
+        base_days>=40 and base_days>=decline_days
+    )
+    out.update({
+        "bowl_decline_days":decline_days,
+        "bowl_base_days":base_days,
+        "bowl_base_to_decline_ratio":ratio,
+        "bowl_decline_pct":decline_pct,
+        "public_bowl_duration_ok":ok,
+    })
+    return out
+
 def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
     entry_i=signal_i+1
     if entry_i>=len(z):return
@@ -168,6 +214,7 @@ def add_event(rows,z,kind,signal_i,event_i,cost,context=None):
          "signal_ema224_slope20":float(z.at[signal_i,"ema224_slope20"]) if pd.notna(z.at[signal_i,"ema224_slope20"]) else np.nan,
          "signal_gap112_224":float(abs(z.at[signal_i,"ema224"]-z.at[signal_i,"ema112"])/z.at[signal_i,"ema224"]) if pd.notna(z.at[signal_i,"ema224"]) and z.at[signal_i,"ema224"]>0 and pd.notna(z.at[signal_i,"ema112"]) else np.nan,
          "signal_headroom448":float(z.at[signal_i,"ema448"]/z.at[signal_i,"ac"]-1) if pd.notna(z.at[signal_i,"ema448"]) and z.at[signal_i,"ac"]>0 else np.nan}
+    rec.update(public_bowl_duration_context(z,signal_i))
     if context:
         rec.update(context)
     if (kind=="E3_CLASSIC_PULLBACK" or kind.startswith("E4_REACCEL")) and context:
@@ -613,6 +660,38 @@ def summarize_e4_confirmation(ev):
             out.append(rec)
     return pd.DataFrame(out)
 
+def summarize_public_bowl_duration(ev):
+    """Test the publicly stated Bowl duration relation without tuning a new threshold."""
+    if ev.empty:return pd.DataFrame()
+    kinds=["E3_CLASSIC_PULLBACK","E4_REACCEL_UP","E4_REACCEL_BULL",
+           "E4_REACCEL_1D","E4_REACCEL_3D","E4_REACCEL_5D"]
+    x=ev[ev["kind"].isin(kinds)].copy()
+    if x.empty:return pd.DataFrame()
+    x["public_bowl_duration_state"]=np.where(
+        x["public_bowl_duration_ok"].fillna(False),
+        "BOWL2_GE_BOWL1_PUBLIC_CONTEXT",
+        "PUBLIC_DURATION_CONTEXT_NOT_MET",
+    )
+    out=[]
+    for (sp,kind,state),q in x.groupby(
+        ["split","kind","public_bowl_duration_state"],dropna=False,observed=True
+    ):
+        rec={
+            "split":sp,"kind":kind,"state":state,"n":len(q),
+            "median_decline_days":pd.to_numeric(q["bowl_decline_days"],errors="coerce").median(),
+            "median_base_days":pd.to_numeric(q["bowl_base_days"],errors="coerce").median(),
+            "median_base_to_decline_ratio":pd.to_numeric(q["bowl_base_to_decline_ratio"],errors="coerce").median(),
+            "median_decline_pct":pd.to_numeric(q["bowl_decline_pct"],errors="coerce").median(),
+        }
+        for h in (20,60):
+            s=pd.to_numeric(q[f"ret{h}"],errors="coerce").dropna()
+            rec[f"n{h}"]=len(s)
+            rec[f"mean{h}"]=s.mean() if len(s) else np.nan
+            rec[f"median{h}"]=s.median() if len(s) else np.nan
+            rec[f"win{h}"]=(s>0).mean() if len(s) else np.nan
+        out.append(rec)
+    return pd.DataFrame(out)
+
 def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     panel=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
@@ -660,6 +739,8 @@ def main():
     tp.to_csv(a.out/"event_first_trade_path.csv",index=False,encoding="utf-8-sig")
     e4=summarize_e4_confirmation(ev)
     e4.to_csv(a.out/"event_first_e4_confirmation.csv",index=False,encoding="utf-8-sig")
+    bowlctx=summarize_public_bowl_duration(ev)
+    bowlctx.to_csv(a.out/"event_first_public_bowl_duration.csv",index=False,encoding="utf-8-sig")
     print("\n=== EVENT_FIRST SUMMARY (returns net of one round-trip cost assumption) ===")
     if not sm.empty:
         show=sm.copy()
@@ -705,5 +786,13 @@ def main():
                   "mean60","median60","win60","target60","stop60","pathmean60","pathmedian60"]:
             if c in show:show[c]=(show[c]*100).round(2)
         print("\n=== E4 CONFIRMATION QUALITY DIAGNOSTIC (%) ===")
+        print(show.to_string(index=False))
+    if not bowlctx.empty:
+        show=bowlctx.copy()
+        for c in ["mean20","median20","win20","mean60","median60","win60","median_decline_pct"]:
+            if c in show:show[c]=(show[c]*100).round(2)
+        if "median_base_to_decline_ratio" in show:
+            show["median_base_to_decline_ratio"]=show["median_base_to_decline_ratio"].round(2)
+        print("\n=== PUBLIC BOWL DURATION CONTEXT (BOWL-2 >= BOWL-1) ===")
         print(show.to_string(index=False))
 if __name__=="__main__":main()
