@@ -142,14 +142,28 @@ def find_bowl(z):
     q10=float(base.ac.quantile(.10)); q90=float(base.ac.quantile(.90))
     base_range=(q90/q10-1) if q10>0 else np.nan
     base_slope=float(base.ac.iloc[-1]/base.ac.iloc[0]-1) if len(base)>1 else np.nan
+
+    # Bowl-2 should be a real base, not simply a long move that happens to end
+    # near EMA224. Measure the early 70% separately so the later Bowl-3 launch
+    # is not mistaken for sideways accumulation.
+    core_end_i=min(approach_i-5,base_start_i+max(20,int(base_days*.70)))
+    core_end_i=max(base_start_i+10,core_end_i)
+    core=z.loc[base_start_i:core_end_i]
+    cq10=float(core.ac.quantile(.10)); cq90=float(core.ac.quantile(.90))
+    core_range=(cq90/cq10-1) if cq10>0 else np.nan
+    core_slope=float(core.ac.iloc[-1]/core.ac.iloc[0]-1) if len(core)>1 else np.nan
     return {
         "approach_i":approach_i,"peak_i":peak_i,"base_start_i":base_start_i,"bottom_i":bottom_i,
+        "core_end_i":core_end_i,
         "below224_days_before_approach":below_days,
         "bowl1_days":decline_days,"bowl2_days":base_days,
+        "bowl2_core_days":core_end_i-base_start_i,
         "bowl2_over_bowl1":base_days/decline_days,
         "bowl1_decline_pct":decline_pct,
         "bowl2_range_pct":base_range,
         "bowl2_net_change_pct":base_slope,
+        "bowl2_core_range_pct":core_range,
+        "bowl2_core_net_change_pct":core_slope,
     }
 
 def find_anchor(z,bowl,min_turnover):
@@ -242,7 +256,12 @@ def classify_one(g,min_turnover):
     bowl_duration_ok=bool(bowl["bowl2_days"]>=bowl["bowl1_days"])
     four_month_ok=bool(bowl["below224_days_before_approach"]>=80)
     big_decline=bool(bowl["bowl1_decline_pct"]<=-.20)
-    base_reasonable=bool(bowl["bowl2_range_pct"]<=.45)
+    base_reasonable=bool(
+        pd.notna(bowl["bowl2_core_range_pct"]) and
+        pd.notna(bowl["bowl2_core_net_change_pct"]) and
+        bowl["bowl2_core_range_pct"]<=.35 and
+        abs(bowl["bowl2_core_net_change_pct"])<=.20
+    )
     anchor_strict=bool(anchor["anchor_alive_strict"])
     concrete_strict=bool(concrete and concrete.get("concrete_hold_strict",False))
     concrete_loose=bool(concrete and concrete.get("concrete_hold_loose",False))
@@ -285,12 +304,15 @@ def classify_one(g,min_turnover):
         "ema112_slope20_pct":float(cur.ema112_slope20*100) if pd.notna(cur.ema112_slope20) else np.nan,
         "ema224_slope20_pct":float(cur.ema224_slope20*100) if pd.notna(cur.ema224_slope20) else np.nan,
         "bowl1_peak_date":z.at[bowl["peak_i"],"date"],"bowl_bottom_date":z.at[bowl["bottom_i"],"date"],
+        "bowl2_start_date":z.at[bowl["base_start_i"],"date"],"bowl2_core_end_date":z.at[bowl["core_end_i"],"date"],
         "bowl3_approach_date":z.at[bowl["approach_i"],"date"],
-        "bowl1_days":bowl["bowl1_days"],"bowl2_days":bowl["bowl2_days"],
+        "bowl1_days":bowl["bowl1_days"],"bowl2_days":bowl["bowl2_days"],"bowl2_core_days":bowl["bowl2_core_days"],
         "bowl2_over_bowl1":bowl["bowl2_over_bowl1"],
         "bowl1_decline_pct":bowl["bowl1_decline_pct"]*100,
         "bowl2_range_pct":bowl["bowl2_range_pct"]*100,
         "bowl2_net_change_pct":bowl["bowl2_net_change_pct"]*100,
+        "bowl2_core_range_pct":bowl["bowl2_core_range_pct"]*100,
+        "bowl2_core_net_change_pct":bowl["bowl2_core_net_change_pct"]*100,
         "below224_days_before_approach":bowl["below224_days_before_approach"],
         "bowl_duration_ok":bowl_duration_ok,"four_month_below224":four_month_ok,
         "anchor_date":z.at[anchor["anchor_i"],"date"],"anchor_open":anchor["anchor_open_adj"]/factor,
@@ -304,7 +326,13 @@ def classify_one(g,min_turnover):
         "concrete_hold_strict":concrete_strict,"concrete_hold_loose":concrete_loose,
         "target_type":target_name,"target_price":target_price,
         "target_upside_pct":((target_price/cur_price-1)*100 if pd.notna(target_price) and cur_price>0 else np.nan),
-        "_idx_peak":bowl["peak_i"],"_idx_bottom":bowl["bottom_i"],"_idx_approach":bowl["approach_i"],
+        "action_status":(
+            "WATCH_TARGET_TOO_CLOSE" if tier in ("A","B") and pd.notna(target_price) and (target_price/cur_price-1)<.05
+            else "CLASSIC_WATCH" if tier in ("A","B")
+            else "RESEARCH_ONLY"
+        ),
+        "_idx_peak":bowl["peak_i"],"_idx_bottom":bowl["bottom_i"],"_idx_base_start":bowl["base_start_i"],
+        "_idx_core_end":bowl["core_end_i"],"_idx_approach":bowl["approach_i"],
         "_idx_anchor":anchor["anchor_i"],"_idx_resistance":(concrete["resistance_i"] if concrete else np.nan),
     }
     return rec,z
@@ -370,9 +398,13 @@ def render_chart(z,rec,out_dir,bars=280):
         hits=t.index[t.orig_i.eq(orig)]
         return int(hits[-1]) if len(hits) else None
 
+    p0=xpos(int(rec["_idx_base_start"])); p1=xpos(int(rec["_idx_approach"]))
+    if p0 is not None and p1 is not None and p1>p0:
+        ax.axvspan(p0,p1,alpha=.06,label="Bowl2/base")
     for label,orig,style in [
         ("Bowl1 peak",rec["_idx_peak"],"--"),("Bowl bottom",rec["_idx_bottom"],":"),
-        ("Bowl3/224 area",rec["_idx_approach"],"-."),("Anchor",rec["_idx_anchor"],"--")]:
+        ("Bowl2 start",rec["_idx_base_start"],":"),("Bowl3/224 area",rec["_idx_approach"],"-."),
+        ("Anchor",rec["_idx_anchor"],"--")]:
         p=xpos(int(orig))
         if p is not None:ax.axvline(p,linestyle=style,linewidth=1.0,label=label)
 
@@ -389,8 +421,9 @@ def render_chart(z,rec,out_dir,bars=280):
     if ticks[-1]!=len(t)-1:ticks.append(len(t)-1)
     av.set_xticks(ticks)
     av.set_xticklabels([pd.Timestamp(t.at[i,"date"]).strftime("%Y-%m-%d") for i in ticks],rotation=25,ha="right")
-    ax.set_title(f'{rec["code"]} | DANTE_CLASSIC_V1 {rec["tier"]} | {rec["state"]} | score {rec["score"]:.0f}')
+    ax.set_title(f'{rec["code"]} | DANTE_CLASSIC_V1 {rec["tier"]} | {rec["action_status"]} | {rec["state"]} | score {rec["score"]:.0f}')
     note=(f'Bowl1 {rec["bowl1_days"]}d / Bowl2 {rec["bowl2_days"]}d (x{rec["bowl2_over_bowl1"]:.2f}) | '
+          f'core {rec["bowl2_core_days"]}d range {rec["bowl2_core_range_pct"]:.1f}% net {rec["bowl2_core_net_change_pct"]:.1f}% | '
           f'below224 {rec["below224_days_before_approach"]}d | anchor vol x{rec["anchor_volume_ratio"]:.1f}, '
           f'closes below open {rec["anchor_closes_below"]} | concrete strict={rec["concrete_hold_strict"]}')
     fig.text(.01,.01,note,fontsize=8)
@@ -462,8 +495,9 @@ def main():
         render_chart(chart_map[r.series_id],r.to_dict(),chart_dir)
 
     print("\n=== DANTE_CLASSIC_V1 TOP ===")
-    showcols=["rank","code","name","exchange","tier","state","score","current_close",
-              "bowl1_days","bowl2_days","bowl2_over_bowl1","below224_days_before_approach",
+    showcols=["rank","code","name","exchange","tier","action_status","state","score","current_close",
+              "bowl1_days","bowl2_days","bowl2_core_days","bowl2_over_bowl1",
+              "bowl2_core_range_pct","bowl2_core_net_change_pct","below224_days_before_approach",
               "anchor_date","anchor_volume_ratio","anchor_closes_below","concrete_hold_strict",
               "dist224_pct","ema112_slope20_pct","target_type","target_price","target_upside_pct"]
     print(out[showcols].head(30).to_string(index=False))
