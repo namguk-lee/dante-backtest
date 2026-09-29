@@ -12,7 +12,7 @@ This is a transparent research approximation, not a reproduction of proprietary 
 from __future__ import annotations
 import argparse, math, random, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import numpy as np
@@ -247,7 +247,12 @@ def main():
     a=parse_args(); a.out.mkdir(parents=True,exist_ok=True)
     ko=load(a.ko,"KO"); kq=load(a.kq,"KQ"); panel=pd.concat([ko,kq],ignore_index=True)
     base_date=pd.Timestamp(panel.date.max()).normalize()
-    target=pd.Timestamp(a.target_date).normalize() if a.target_date else pd.Timestamp(datetime.now(KST).date()-timedelta(days=1))
+    if a.target_date:
+        target=pd.Timestamp(a.target_date).normalize()
+    else:
+        now=datetime.now(KST)
+        closed_day=now.date() if now.time()>=dtime(16,10) else now.date()-timedelta(days=1)
+        target=pd.Timestamp(closed_day).normalize()
     stage1=find_stage1(panel,a)
     stage1.to_csv(a.out/"stage1_recent_strong_events.csv",index=False,encoding="utf-8-sig")
     print(f"base={base_date.date()} stage1_events={len(stage1):,} target<={target.date()}",flush=True)
