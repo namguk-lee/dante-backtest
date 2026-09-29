@@ -77,6 +77,14 @@ jobs:
           --trades dante_results/stop_trades.csv
           --out dante_results
 
+      - name: Enrich signals with V5 market regime
+        run: >-
+          python research/dante/dante_regime_enrichment_v5.py
+          --ko krx_data/ko_eod.parquet
+          --kq krx_data/kq_eod.parquet
+          --signals dante_results/signals.csv
+          --out dante_results
+
       - name: Print validation summaries
         if: success()
         run: |
@@ -88,6 +96,9 @@ jobs:
           print('\n=== V4 locked filter ===')
           y = pd.read_csv('dante_results/v4_split_comparison.csv')
           print(y.to_string(index=False))
+          print('\n=== V5 market regime (development rows) ===')
+          z = pd.read_csv('dante_results/v5_regime_comparison.csv')
+          print(z[z['split'].isin(['TRAIN','VALID'])].to_string(index=False))
           PY
 
       - name: Upload research results
