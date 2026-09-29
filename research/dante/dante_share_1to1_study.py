@@ -341,6 +341,51 @@ def render(z,case,g,out_dir):
     fig.savefig(p,dpi=150); plt.close(fig)
     return p
 
+def render_long_below(z,case,g,out_dir):
+    """Render the >=30-session below-MA structural cycle used by the current proxy."""
+    end=len(z); start=max(0,end-320)
+    t=z.iloc[start:].copy().reset_index().rename(columns={"index":"orig_i"})
+    factor=float(t.iloc[-1].ac/t.iloc[-1].close) if float(t.iloc[-1].close)>0 else 1.0
+    t["price"]=t.ac/factor; t["ma_raw"]=t.ma/factor
+    x=np.arange(len(t))
+    fig,ax=plt.subplots(figsize=(15,7))
+    ax.plot(x,t.price,label="Close",linewidth=1.1)
+    ax.plot(x,t.ma_raw,label=f'EMA{int(case["share_ma"])}',linewidth=1.5)
+
+    def xpos(date):
+        if pd.isna(date):return None
+        ids=t.index[t.date.eq(pd.Timestamp(date))]
+        return int(ids[-1]) if len(ids) else None
+
+    cycle_start=xpos(g.get("cycle_start_date",pd.NaT))
+    cross=xpos(g.get("cross_date",pd.NaT))
+    low=xpos(g.get("cycle_low_date",pd.NaT))
+    if cycle_start is not None and cross is not None:
+        ax.axvspan(cycle_start,cross,alpha=.10,label="sell-side cycle")
+    if cross is not None:
+        ax.axvspan(cross,len(t)-1,alpha=.07,label="buy-side cycle")
+        ax.axvline(cross,linestyle="--",linewidth=1.0,label="selected recovery")
+    if low is not None:
+        ax.axvline(low,linestyle=":",linewidth=.9,label="cycle low")
+
+    ax.set_title(
+        f'{case["stock"]} | {pd.Timestamp(case["analysis_date"]).date()} | '
+        f'EMA{int(case["share_ma"])} long-below share proxy'
+    )
+    ax.grid(alpha=.15); ax.legend(loc="best")
+    txt=(
+        f'pre-below={g.get("pre_days",np.nan):.0f}d | '
+        f'height={g.get("ratio_cross_ma_current",np.nan):.3f} | '
+        f'mean-distance={g.get("cycle_mean_dist_ratio",np.nan):.3f} | '
+        f'cycle-height={g.get("cycle_height_current_ratio",np.nan):.3f}'
+    )
+    fig.text(.01,.01,txt,fontsize=9)
+    fig.tight_layout(rect=[0,.035,1,1])
+    out_dir.mkdir(parents=True,exist_ok=True)
+    p=out_dir/f'{case["stock"]}_{int(case["share_ma"])}_{pd.Timestamp(case["analysis_date"]).date()}_long_below.png'
+    fig.savefig(p,dpi=150); plt.close(fig)
+    return p
+
 def metric_summary(df):
     pos=df[df.label.eq("confirmed_1to1")]
     metric_cols=[c for c in df.columns if c.startswith("count_ratio_") or c.startswith("area_ratio_") or c.startswith("mean_dist_ratio_") or c.startswith("ratio_")]
@@ -389,6 +434,10 @@ def main():
         rec={**case,**g,"series_id":sid,"market_date":z.iloc[-1].date,"num_structural_crosses":len(allg),"used_fallback":used_fallback}
         rows.append(rec)
         if pd.notna(rec.get("cross_i")):render(z,case,rec,a.out/"charts")
+        long_candidates=[x for x in allg if float(x.get("pre_days",0) or 0)>=30]
+        if long_candidates:
+            long_g=sorted(long_candidates,key=lambda x:pd.Timestamp(x["cross_date"]))[-1]
+            render_long_below(z,case,long_g,a.out/"charts_long_below")
     out=pd.DataFrame(rows)
     out.to_csv(a.out/"share_1to1_geometry_v3.csv",index=False,encoding="utf-8-sig")
     all_cross_rows=[]
