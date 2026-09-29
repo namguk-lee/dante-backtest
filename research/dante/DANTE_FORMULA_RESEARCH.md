@@ -290,3 +290,30 @@ Research artifacts:
 - workflow Run #11: local-wave / structural geometry
 - `share_1to1_geometry_v3.csv`
 - `share_1to1_metric_summary_v3.csv`
+
+
+## 16. Public Bowl duration condition — historical diagnostic (2026-09-30)
+
+The public rule “Bowl-2 should be longer than Bowl-1” was tested as **diagnostic context**, not fitted as a new entry threshold.
+
+Transparent translation reused the existing `bowl_mask` geometry:
+- within the latest 220 sessions, locate the trough,
+- locate the preceding peak within up to 160 sessions,
+- Bowl-1 proxy = peak -> trough duration,
+- Bowl-2 proxy = trough -> signal duration,
+- public duration context = Bowl-2 >= Bowl-1, with the existing shape guards (decline >=10 sessions, decline <= -20%, base >=40 sessions).
+
+Workflow:
+- Dante event-first backtest Run #19
+- commit: `eb4877973b0ce0fdaa361dcdcc4de7cc9f5e3011`
+
+Result:
+- TRAIN: the public duration context separated stronger E3/E4 groups.
+- VALID: some **mean** 20-day returns improved, but medians and win rates remained weak/negative, indicating winner concentration.
+- TEST: the public duration context was worse in the very small qualifying samples; for example E4_REACCEL_3D had n=2 and -10.40% mean 20-day return versus +9.98% for the non-matching group (n=11).
+
+Conclusion:
+1. Keep “Bowl-2 >= Bowl-1” as a faithful public **structure descriptor**.
+2. Do **not** use the current mechanical translation as a standalone ranking/entry filter.
+3. The public concept may still be visually/manual and broader than this trough/peak proxy.
+4. Continue testing other explicitly public confirmations before changing the live recommendation rule, especially the 112/224 reverse-to-positive transition.
