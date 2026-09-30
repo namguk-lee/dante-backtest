@@ -58,3 +58,18 @@ python research/dante/dante_official_case_audit.py \
 
 `case_panel.parquet`는 종목별 일봉, series_id, code, name, exchange, raw OHLCV, adjusted_close, amount를 포함한다.
 `matrix_before.py`는 비교할 커밋의 원본 신호 매트릭스다. 입력 원본과 커밋을 고정하고 데이터 출처를 기록한다.
+
+## Closed KRX prices and entry review (2026-09-30)
+
+`--freshen-with-naver` now fails explicitly: even venue-labelled public chart
+responses disagreed with independent KRX previous-close evidence. The cause
+is unresolved. Use `--krx-overlay` only for externally reviewed CLOSED KRX
+rows, preserving source/verification URLs, verification scope and amount
+precision. Validation does not independently prove supplied prices. Seoul
+intraday cutoff prevents unfinished daily bars; reference lag and partial
+latest-date coverage cannot certify a current full-market panel.
+
+The two-stock dated entry review is in `reviews/ENTRY_REVIEW_20260929.md`.
+Both existing watchlist picks failed strict anchor maintenance and remain
+WAIT_NEW_ANCHOR, not buy recommendations. Broad structural flags and the
+2%-tolerance concrete proxy do not supersede that failure.

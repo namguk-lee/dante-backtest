@@ -20,7 +20,7 @@ jobs:
           cache: pip
           cache-dependency-path: research/dante/requirements.txt
       - run: pip install -r research/dante/requirements.txt
-      - run: python -m unittest discover -s research/dante -p 'test_signal_matrix.py' -v
+      - run: python -m unittest discover -s research/dante -p 'test_*.py' -v
         env:
           PYTHONPATH: research/dante
           MPLCONFIGDIR: /tmp/dante-mpl
