@@ -247,6 +247,8 @@ Then report:
 
 ## 15. Share / 지분 1:1 empirical narrowing — 2026-09-29
 
+> Historical hypothesis, superseded for the current scanner by `DANTE_SHARE_1TO1_RESULTS.md`. The active implementation uses a structurally selected recovery-height range 0.65–1.75 AND mean-distance balance 0.65–1.35, not the `ratio >= 1` values below. Neither implementation is an exact proprietary formula.
+
 Public wording and dated-case reconstruction now narrow the practical interpretation:
 
 - official/public descriptions repeatedly say an MA-relative **1:1 or more** position, not “exactly 1.00”

@@ -1,5 +1,14 @@
 # Dante Backtest
 
+## 최신 검증 상태 — 2026-09-30
+
+KOSDAQ GLOBAL 구성종목 누락을 수정했습니다. 이전 전체시장 성과는 수정 데이터로 재검증이 필요합니다. 공식 사례 날짜·이름 변경 이력을 재검증하고, 중복 회복 신호 집계와 공구리 시간 순서를 수정했습니다. 현재 결과는 연구용 관심종목이며 검증된 매수 추천이 아닙니다.
+
+- 검증 기준: [DANTE_VALIDATION_CONTRACT.md](research/dante/DANTE_VALIDATION_CONTRACT.md)
+- 공식 사례 재계산: [DANTE_CASE_AUDIT_RESULTS.md](research/dante/DANTE_CASE_AUDIT_RESULTS.md)
+- 과거 연구 결과는 아래에 보존합니다. 단계별 구간과 비용 가정이 다르므로 직접 비교하지 않습니다.
+
+
 한국 주식 시장에서 공개적으로 설명된 단테식 **EMA224 / 역배열 / 거래량 기준봉** 구조를 정량 검증하는 연구 저장소입니다.
 
 ## 현재 연구 규칙 (V3.1)

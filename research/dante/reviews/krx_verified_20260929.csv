@@ -1,0 +1,3 @@
+date,code,open,high,low,close,volume,amount,price_venue,bar_status,source_url,verification_url,verification_scope,amount_precision
+2026-09-29,041190,5760,5780,5670,5750,776967,4445000000,KRX,CLOSED,https://stock.mk.co.kr/price/home/KR7041190000,https://kind.krx.co.kr/common/stockprices.do?method=searchStockPricesMain&isurCd=04119,OHLCV from MK; close independently confirmed by next-session KIND previous close,rounded to million KRW
+2026-09-29,234340,21900,22500,21850,22200,150120,3311000000,KRX,CLOSED,https://stock.mk.co.kr/price/home/KR7234340008,https://kind.krx.co.kr/common/stockprices.do?method=searchStockPricesMain&isurCd=23434,OHLCV from MK; close independently confirmed by next-session KIND previous close,rounded to million KRW

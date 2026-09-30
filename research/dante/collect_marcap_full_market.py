@@ -10,13 +10,10 @@ This is a research adjustment, not an official vendor adjustment factor.
 """
 from __future__ import annotations
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-import time
 import urllib.request
 import numpy as np
 import pandas as pd
-import requests
 
 RAW_BASE = "https://raw.githubusercontent.com/FinanceData/marcap/master/data"
 
@@ -28,7 +25,9 @@ def parse_args():
     p.add_argument("--cache",type=Path,default=Path("marcap_cache"))
     p.add_argument("--refresh-end-year",action="store_true")
     p.add_argument("--freshen-with-naver",action="store_true",
-                   help="Append missing recent bars from Naver Finance after marcap's latest date.")
+                   help="Disabled: ambiguous venue data. Use --krx-overlay with verified closed bars.")
+    p.add_argument("--krx-overlay",type=Path,
+                   help="Verified KRX-only CSV: date,code,open,high,low,close,volume,amount,price_venue,bar_status,source_url,verification_url.")
     p.add_argument("--naver-workers",type=int,default=12,
                    help="Parallel workers for the narrow recent-bar Naver overlay.")
     p.add_argument("--max-stale-calendar-days",type=int,default=None,
@@ -74,6 +73,9 @@ def load_year(path,start,end):
     x["Date"]=pd.to_datetime(x["Date"],errors="coerce")
     x=x[(x["Date"]>=start)&(x["Date"]<=end)]
     x["Market"]=x["Market"].astype(str).str.upper()
+    # marcap records the KOSDAQ Global segment separately. It remains part
+    # of the KOSDAQ universe; excluding it creates multi-year history gaps.
+    x["Market"]=x["Market"].replace({"KOSDAQ GLOBAL":"KOSDAQ"})
     x=x[x["Market"].isin(["KOSPI","KOSDAQ"])].copy()
     if ratio_col: x=x.rename(columns={ratio_col:"reported_change_pct"})
     else: x["reported_change_pct"]=np.nan
@@ -89,123 +91,71 @@ def _to_number(value):
         return np.nan
     return pd.to_numeric(s,errors="coerce")
 
+def last_closed_date(now=None):
+    """Calendar cutoff in Seoul; holidays still require the freshness check."""
+    now=pd.Timestamp.now(tz="Asia/Seoul") if now is None else pd.Timestamp(now)
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    now=now.tz_convert("Asia/Seoul")
+    cutoff=now.normalize()
+    if now.hour*60+now.minute<15*60+40:
+        cutoff-=pd.Timedelta(days=1)
+    while cutoff.weekday()>=5:
+        cutoff-=pd.Timedelta(days=1)
+    return cutoff.tz_localize(None)
+
+
 def append_recent_naver(x,end,workers=12):
-    """Append only bars newer than marcap's last date from Naver Finance.
+    raise RuntimeError("Naver freshness disabled: venue-specific responses disagreed with KRX. Supply --krx-overlay with independently verified CLOSED KRX bars.")
 
-    This is a narrow freshness overlay, not a replacement for marcap history.
-    We query only symbols active on marcap's latest session and retain rows
-    strictly newer than that session.
+
+def append_verified_krx(x,path,end,now=None):
+    """Accept a reviewed provenance ledger, never infer venue from a URL.
+
+    The caller must verify the supplied OHLCV externally. This validator checks
+    its declared contract, chronology and integrity; it does not certify prices.
     """
-    if x.empty:
-        return x
-    latest=pd.to_datetime(x["Date"],errors="coerce").max()
-    if pd.isna(latest) or latest>=end:
-        print(f"naver freshener: no overlay needed (marcap latest={latest})",flush=True)
-        return x
-
-    meta=(x.sort_values("Date")
-            .assign(Code=lambda q:q["Code"].astype(str).str.replace(r"\.0$","",regex=True).str.zfill(6)))
-    active=meta[meta["Date"].eq(latest)].drop_duplicates("Code",keep="last")
-    info=active.set_index("Code")[["Name","Market"]].to_dict("index")
-    codes=sorted(info)
-    if not codes:
-        print("naver freshener: no active codes on latest marcap date",flush=True)
-        return x
-
-    url_tpl="https://m.stock.naver.com/api/stock/{code}/price?pageSize=10&page=1"
-    headers={
-        "User-Agent":"Mozilla/5.0 (compatible; dante-backtest/1.0)",
-        "Referer":"https://m.stock.naver.com/"
-    }
-
-    def fetch_one(code):
-        last_exc=None
-        for attempt in range(3):
-            try:
-                r=requests.get(url_tpl.format(code=code),headers=headers,timeout=12)
-                if r.status_code==429:
-                    time.sleep(0.6*(attempt+1))
-                    continue
-                r.raise_for_status()
-                data=r.json()
-                if isinstance(data,dict):
-                    data=(data.get("priceInfos") or data.get("data") or data.get("result") or [])
-                if not isinstance(data,list):
-                    return code,[],f"unexpected_json:{type(data).__name__}"
-                rows=[]
-                for bar in data:
-                    if not isinstance(bar,dict):
-                        continue
-                    dt=pd.to_datetime(bar.get("localTradedAt") or bar.get("localDate"),errors="coerce")
-                    if pd.isna(dt) or dt<=latest or dt>end:
-                        continue
-                    o=_to_number(bar.get("openPrice"))
-                    h=_to_number(bar.get("highPrice"))
-                    l=_to_number(bar.get("lowPrice"))
-                    cl=_to_number(bar.get("closePrice"))
-                    v=_to_number(bar.get("accumulatedTradingVolume"))
-                    if not all(pd.notna(vv) and float(vv)>0 for vv in (o,h,l,cl)):
-                        continue
-                    if pd.isna(v) or v<0:
-                        v=0.0
-                    amount=_to_number(bar.get("accumulatedTradingValue"))
-                    if pd.isna(amount):
-                        amount=float(cl)*float(v)
-                    change=_to_number(bar.get("fluctuationsRatio"))
-                    m=info.get(code,{})
-                    rows.append({
-                        "Date":pd.Timestamp(dt).normalize(),
-                        "Code":code,
-                        "Name":m.get("Name",code),
-                        "Open":o,"High":h,"Low":l,"Close":cl,
-                        "Volume":v,"Amount":amount,
-                        "Market":m.get("Market"),
-                        "reported_change_pct":change,
-                    })
-                return code,rows,None
-            except Exception as exc:
-                last_exc=exc
-                time.sleep(0.25*(attempt+1))
-        return code,[],f"{type(last_exc).__name__}:{last_exc}" if last_exc else "unknown"
-
-    rows=[]; errors=[]; completed=0
-    with ThreadPoolExecutor(max_workers=max(1,int(workers))) as pool:
-        futs={pool.submit(fetch_one,code):code for code in codes}
-        for fut in as_completed(futs):
-            code,bars,err=fut.result()
-            completed+=1
-            if bars:
-                rows.extend(bars)
-            if err:
-                errors.append((code,err))
-            if completed%500==0:
-                print(f"naver freshener progress: {completed}/{len(codes)} codes, rows={len(rows):,}, errors={len(errors)}",flush=True)
-
-    if errors:
-        print(f"naver freshener errors={len(errors)}; samples={errors[:5]}",flush=True)
-    if not rows:
-        print(f"naver freshener: no rows appended after marcap latest={latest.date()}",flush=True)
-        return x
-
-    recent=pd.DataFrame(rows)
-    recent=recent.drop_duplicates(["Code","Date"],keep="last")
-    counts=recent.groupby("Date").size().sort_index()
-    print("naver overlay dates: "+", ".join(f"{d.date()}={int(n):,}" for d,n in counts.items()),flush=True)
-
-    for col in x.columns:
-        if col not in recent.columns:
-            recent[col]=np.nan
-    for col in recent.columns:
-        if col not in x.columns:
-            x[col]=np.nan
-    out=pd.concat([x,recent[x.columns]],ignore_index=True)
-    out=out.sort_values(["Code","Date"]).drop_duplicates(["Code","Date"],keep="last")
-    print(
-        f"naver freshener: appended {len(recent):,} rows; "
-        f"latest {latest.date()} -> {pd.to_datetime(out['Date']).max().date()}",
-        flush=True
-    )
-    return out
+    from urllib.parse import urlparse
+    q=pd.read_csv(path,dtype={"code":str})
+    required=["date","code","open","high","low","close","volume","amount",
+              "price_venue","bar_status","source_url","verification_url"]
+    missing=[c for c in required if c not in q]
+    if missing:raise ValueError(f"KRX overlay missing {missing}")
+    if q.empty:raise ValueError("KRX overlay is empty")
+    q["date"]=pd.to_datetime(q.date,errors="raise")
+    q["code"]=q.code.str.zfill(6)
+    if not q.code.str.fullmatch(r"[0-9]{6}").all():raise ValueError("invalid overlay code")
+    if q.duplicated(["code","date"]).any():raise ValueError("duplicate overlay code/date")
+    if not q.price_venue.eq("KRX").all() or not q.bar_status.eq("CLOSED").all():
+        raise ValueError("overlay requires CLOSED KRX bars")
+    if (q.date!=q.date.dt.normalize()).any():raise ValueError("overlay dates must be session dates")
+    if (q.date>last_closed_date(now)).any():raise ValueError("incomplete session in overlay")
+    if (q.date>pd.Timestamp(end)).any():raise ValueError("overlay extends past analysis cutoff")
+    for c in ("open","high","low","close","volume","amount"):
+        q[c]=pd.to_numeric(q[c],errors="raise")
+        if not np.isfinite(q[c]).all():raise ValueError(f"nonfinite overlay {c}")
+    if not (q[["open","high","low","close"]]>0).all().all():raise ValueError("nonpositive OHLC")
+    if (q.volume<=0).any() or (q.amount<=0).any():raise ValueError("overlay requires traded volume/value")
+    if ((q.high<q[["open","close","low"]].max(axis=1))|
+        (q.low>q[["open","close","high"]].min(axis=1))).any():raise ValueError("invalid OHLC envelope")
+    for row in q.itertuples():
+        urls=[urlparse(str(row.source_url)),urlparse(str(row.verification_url))]
+        if any(u.scheme!="https" or not u.hostname for u in urls):raise ValueError("invalid provenance URL")
+        if urls[0].hostname==urls[1].hostname:raise ValueError("independent verification host required")
+    latest=pd.to_datetime(x.Date).max()
+    if (q.date<=latest).any():raise ValueError("overlay must be newer than reference history")
+    meta=x[x.Date.eq(latest)].copy();meta["Code"]=meta.Code.astype(str).str.zfill(6)
+    meta=meta.drop_duplicates("Code").set_index("Code")
+    if not set(q.code)<=set(meta.index):raise ValueError("overlay contains unknown/inactive code")
+    q["Name"]=q.code.map(meta.Name);q["Market"]=q.code.map(meta.Market)
+    q["reported_change_pct"]=np.nan
+    q["verification_status"]="REVIEWED_OVERLAY"
+    for col in ("verification_scope","amount_precision"):
+        if col not in q:q[col]="unspecified"
+    q=q.rename(columns={"date":"Date","code":"Code","open":"Open","high":"High","low":"Low",
+                        "close":"Close","volume":"Volume","amount":"Amount"})
+    print(f"reviewed KRX overlay: {len(q)} rows, {q.Code.nunique()} codes; coverage is not full-market",flush=True)
+    return pd.concat([x,q],ignore_index=True)
 
 def add_episode_ids(x,episode_gap_days,name_change_gap_days):
     x=x.sort_values(["Code","Date"]).copy()
@@ -239,14 +189,23 @@ def add_research_adjusted_close(x,diff_threshold):
     x["adjustment_bridge"]=mismatch
     return x
 
-def build_panel(paths,start,end,episode_gap_days,name_change_gap_days,diff_threshold,freshen_with_naver=False,naver_workers=12):
+def build_panel(paths,start,end,episode_gap_days,name_change_gap_days,diff_threshold,freshen_with_naver=False,naver_workers=12,krx_overlay=None):
     frames=[]
     for i,path in enumerate(paths,1):
         q=load_year(path,start,end); frames.append(q)
         print(f"read {path.name}: {len(q):,} rows ({i}/{len(paths)})",flush=True)
     x=pd.concat(frames,ignore_index=True)
+    x["price_venue"]="KRX"
+    x["bar_status"]="CLOSED"
+    x["source_url"]=RAW_BASE
+    x["verification_url"]=""
+    x["verification_status"]="REFERENCE_HISTORY"
+    x["verification_scope"]="provider reference; not independently checked per bar"
+    x["amount_precision"]="provider value"
     if freshen_with_naver:
         x=append_recent_naver(x,end,workers=naver_workers)
+    if krx_overlay is not None:
+        x=append_verified_krx(x,krx_overlay,end)
     x=x.dropna(subset=["Date","Code","Open","High","Low","Close","Volume"])
     x=x[(x["Open"]>0)&(x["High"]>0)&(x["Low"]>0)&(x["Close"]>0)]
     x=x.sort_values(["Code","Date"]).drop_duplicates(["Code","Date"],keep="last")
@@ -254,24 +213,37 @@ def build_panel(paths,start,end,episode_gap_days,name_change_gap_days,diff_thres
     x=add_research_adjusted_close(x,diff_threshold)
     x["exchange"]=x["Market"].map({"KOSPI":"KO","KOSDAQ":"KQ"})
     x=x.rename(columns={"Date":"date","Code":"code","Name":"name","Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume","Amount":"amount"})
-    keep=["series_id","code","exchange","name","date","open","high","low","close","adjusted_close","volume","amount","reported_change_pct","adjustment_bridge"]
+    keep=["series_id","code","exchange","name","date","open","high","low","close","adjusted_close","volume","amount","reported_change_pct","adjustment_bridge","price_venue","bar_status","source_url","verification_url","verification_status","verification_scope","amount_precision"]
     return x[keep].sort_values(["series_id","date"]).reset_index(drop=True)
+
+def assert_complete_recent_coverage(panel):
+    reference=panel[panel.verification_status.eq("REFERENCE_HISTORY")]
+    reference_date=reference.date.max()
+    latest=panel.date.max()
+    expected=set(reference.loc[reference.date.eq(reference_date),"code"])
+    observed=set(panel.loc[panel.date.eq(latest),"code"])
+    if pd.notna(reference_date) and latest>reference_date and expected-observed:
+        raise RuntimeError(f"partial latest-date coverage: {len(expected & observed)}/{len(expected)} reference-active codes; not a fresh full-market panel")
 
 def main():
     a=parse_args()
     start=pd.Timestamp(a.start)
-    end=pd.Timestamp(a.end) if a.end else pd.Timestamp.today().normalize()
+    end=pd.Timestamp(a.end) if a.end else last_closed_date()
+    if end.normalize()>last_closed_date():raise ValueError("END is not a closed KRX session date")
+    if a.freshen_with_naver:append_recent_naver(pd.DataFrame(),end)
     a.out.mkdir(parents=True,exist_ok=True)
     years=list(range(start.year,end.year+1))
     paths=[download_year(y,a.cache,refresh=(a.refresh_end_year and y==end.year)) for y in years]
     panel=build_panel(
         paths,start,end,a.episode_gap_days,a.name_change_gap_days,a.corp_action_diff,
         freshen_with_naver=a.freshen_with_naver,
-        naver_workers=a.naver_workers
+        naver_workers=a.naver_workers,krx_overlay=a.krx_overlay
     )
     latest=panel["date"].max() if not panel.empty else pd.NaT
     print(f"final panel latest={latest.date() if pd.notna(latest) else 'NaT'} requested_end={end.date()}",flush=True)
     if a.max_stale_calendar_days is not None:
+        if a.krx_overlay is not None:
+            assert_complete_recent_coverage(panel)
         stale_days=(end.normalize()-pd.Timestamp(latest).normalize()).days if pd.notna(latest) else 999999
         if stale_days>a.max_stale_calendar_days:
             raise RuntimeError(

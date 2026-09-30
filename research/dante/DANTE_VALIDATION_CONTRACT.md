@@ -1,0 +1,75 @@
+# 단테 연구 검증 기준 — 2026-09-30
+
+## 목적과 현재 단계
+
+공개 기법의 구조 탐지, 비공개 지표의 연구 가설, 실행 가능한 진입 검증을 구분한다.
+현재 결과는 `WATCHLIST_RESEARCH_ONLY` / `NOT_VALIDATED`이며 매수 추천이 아니다.
+Event-first와 Classic V2는 각자 실험 정의를 유지한다. 하나를 단테 전체의 공식 산식으로 취급하지 않는다.
+
+| 탐지 | 확인된 개념 | 우리 기계적 구현의 상태 |
+|---|---|---|
+| 256 장기형 | 5/112/224의 회복 관계 | 교차 20일 등 시간 제한은 연구 가정 |
+| 112→224 이평때리기 | 112 회복 후 다음 이평 접근 | 60일 제한·안착 판정은 연구 가정 |
+| 224→448 이평때리기 | 224 회복 후 다음 이평 접근 | 독립 매수 신호로 검증되지 않음 |
+| 밥그릇 | 하락→긴 바닥→224 접근/회복 | 고점·저점 분할과 기간 상수는 proxy |
+| 공구리 | 저항 돌파 후 지지 전환 | 돌파 이후 별도 봉 재시험, 중간 종가 붕괴 시 무효 |
+| 지분 1:1 | 선택 이평 아래/위의 영역 전환 | 30일 하락 구간, 회복비 0.65~1.75·평균비 0.65~1.35는 연구 범위 |
+| 파란점선 | 공식 사례의 접촉/근접 설명 | BB35×2는 미확정 proxy, 순위에 가산하지 않음 |
+| 수박·레인보우 | 공식 사례에 언급되는 지표 | 산식 미확정, 재현 완료로 표시하지 않음 |
+
+공개 개념에 근거한 탐지에도 연구 상수가 포함된다. `public_` 접두사는 정확한 공식 산식임을 보증하지 않는다.
+
+## 날짜·식별·데이터
+
+1. 분석일과 게시일을 구분한다. 모든 특징 계산과 차트는 분석일까지의 행만 받는다.
+2. 종목 이름으로 사례를 찾은 뒤, 같은 상장 에피소드 전체를 사용한다. 과거 이름을 삭제하지 않는다.
+3. 분석일과 마지막 시장 데이터의 차이가 7일을 넘으면 `stale_history`로 제외한다. 7일은 달력 기반 연구 안전장치이며 거래소 휴장일 검증을 대체하지 않는다.
+4. 공식 사례 감사는 유동성·520봉 제한을 별도로 우회해 누락 이유를 확인한다. 실시간 검색의 기본 제한은 유지한다.
+5. `KOSDAQ GLOBAL`은 코스닥 구성종목으로 포함한다. 누락된 구성종목으로 수행한 기존 전체시장 결과는 재실행 전 잠정 결과다.
+6. marcap의 연구 수정주가와 NAVER 대체 데이터는 출처를 구분한다. 서로 동일한 보정계수라고 가정하지 않는다.
+7. 지표가 글에 언급되지 않은 경우 `UNKNOWN`이다. 음성 라벨로 학습하지 않는다.
+
+## 탐지 수와 순위
+
+- 개별 탐지 여부는 모두 보존한다.
+- `public_technique_raw_count`: 탐지 이름 수.
+- `public_technique_count`: 중복을 줄인 회복 단계 수. `RECOVERY_112`는 256/112→224, `RECOVERY_224`는 224→448/밥그릇3을 묶는다.
+- 두 단계 역시 통계적으로 독립적이라는 뜻이 아니다. 점수는 성공 확률이 아니다.
+- 공구리·BB35는 넓은 문맥으로 표시하고 순위에 가산하지 않는다.
+- 재시험 허용폭 3%, 종가 붕괴폭 2%, 돌파폭 0.5%는 기존 연구 가정이며 이번 수정에서 최적화하지 않았다.
+- 붕괴 후 재돌파는 현재 proxy에서 기존 지지의 생존으로 인정하지 않는다. 별도 새 사이클 모델링은 후속 과제다.
+
+## 차트 검증과 진입 검증의 통과 기준
+
+1. 원본 이미지의 기준봉·이평·공구리 위치를 사람이 확인하기 전에는 `visual_match_status=NOT_REVIEWED`를 유지한다.
+2. 밥그릇 언급 사례에는 2번자리·작은 밥그릇도 포함된다. 밥그릇3 탐지율을 전체 밥그릇 재현율로 해석하지 않는다.
+3. 공개 성공 사례만으로 수익성을 주장하지 않는다. 명시적 실패 사례와 같은 날짜·유동성·구조의 대조군을 추가한다.
+4. 매수 검증은 다음 거래일 체결, 갭, 손절·익절, 비용, 미체결을 포함해 비교한다. 종가 기반 미래수익률은 탐색 통계다.
+5. 이미 확인한 TRAIN/VALID/TEST 구간과 비용 가정을 각 실행마다 기록한다. 기존 TEST를 재사용한 결과는 독립 OOS가 아니다.
+
+## 재현 명령
+
+```bash
+PYTHONPATH=research/dante python -m unittest discover -s research/dante -p 'test_signal_matrix.py' -v
+python research/dante/dante_official_case_audit.py \
+  --panel case_panel.parquet --out official_case_review \
+  --baseline matrix_before.py
+```
+
+`case_panel.parquet`는 종목별 일봉, series_id, code, name, exchange, raw OHLCV, adjusted_close, amount를 포함한다.
+`matrix_before.py`는 비교할 커밋의 원본 신호 매트릭스다. 입력 원본과 커밋을 고정하고 데이터 출처를 기록한다.
+
+## Closed KRX prices and entry review (2026-09-30)
+
+`--freshen-with-naver` now fails explicitly: even venue-labelled public chart
+responses disagreed with independent KRX previous-close evidence. The cause
+is unresolved. Use `--krx-overlay` only for externally reviewed CLOSED KRX
+rows, preserving source/verification URLs, verification scope and amount
+precision. Validation does not independently prove supplied prices. Seoul
+intraday cutoff prevents unfinished daily bars; reference lag and partial
+latest-date coverage cannot certify a current full-market panel.
+
+The two-stock dated entry review is in `reviews/ENTRY_REVIEW_20260929.md`.
+Both existing watchlist picks failed strict anchor maintenance and remain
+WAIT_NEW_ANCHOR, not buy recommendations. Broad structural flags and the
+2%-tolerance concrete proxy do not supersede that failure.

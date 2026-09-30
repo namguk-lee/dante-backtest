@@ -2,6 +2,8 @@
 
 Status: research-only. Live scanners were **not** changed by this study.
 
+> 2026-09-30 audit correction: the original name-only matching included two stale cases (Partron and ITM Semiconductor), and renamed histories could be truncated. Original percentages below are retained as historical results, not current authoritative statistics. See `audits/20260930/official_example_features.csv` and `DANTE_CASE_AUDIT_RESULTS.md` for date-validated recomputation after restoring KOSDAQ GLOBAL histories.
+
 Run:
 - GitHub Actions: https://github.com/namguk-lee/dante-backtest/actions/runs/36553973658
 - 22 labeled public/official examples

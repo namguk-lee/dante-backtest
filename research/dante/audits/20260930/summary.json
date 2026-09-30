@@ -1,0 +1,11 @@
+{
+  "labels": 22,
+  "matched": 22,
+  "misses": 0,
+  "overlapping_labels": 10,
+  "concrete_after": 19,
+  "bowl_named": 8,
+  "bowl_named_detected": 4,
+  "ema448_unavailable": 0,
+  "concrete_before": 21
+}

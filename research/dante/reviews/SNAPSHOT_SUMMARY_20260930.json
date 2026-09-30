@@ -1,0 +1,15 @@
+{
+  "analysis_date": "2026-09-30",
+  "reference_active": 2650,
+  "reference_history_520plus": 2401,
+  "accepted_recent_codes": 2453,
+  "scanned_520plus_codes": 2228,
+  "conservative_liquidity_excluded": 1855,
+  "classic_classified_codes": 373,
+  "structures": 149,
+  "strict_anchor": 51,
+  "strict_anchor_and_support": 34,
+  "research_qualified": 0,
+  "validated_buy_signals": 0,
+  "verified_full_market": false
+}
