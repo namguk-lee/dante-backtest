@@ -1,0 +1,62 @@
+name: Dante 224 hybrid comparison
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dante-224-hybrid.yml'
+      - 'research/dante/dante_224_hybrid_comparison.py'
+  workflow_dispatch:
+
+concurrency:
+  group: dante-224-hybrid
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+
+      - name: Restore historical marcap cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_event_bt_cache
+          key: marcap-event-bt-2017-2026-v1
+          restore-keys: |
+            marcap-event-bt-
+
+      - name: Build survivorship-aware historical panel
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2017-01-01"
+          --end "2026-09-29"
+          --out krx_hybrid
+          --cache marcap_event_bt_cache
+          --refresh-end-year
+
+      - name: Compare old, event-first, and hybrid
+        run: >-
+          python research/dante/dante_224_hybrid_comparison.py
+          --ko krx_hybrid/ko_eod.parquet
+          --kq krx_hybrid/kq_eod.parquet
+          --out hybrid_compare
+          --start "2018-01-01"
+          --cost-bps 50
+
+      - name: Upload comparison results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-224-hybrid-${{ github.run_number }}
+          retention-days: 30
+          path: hybrid_compare/
