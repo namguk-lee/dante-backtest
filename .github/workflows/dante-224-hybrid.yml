@@ -31,14 +31,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: marcap_event_bt_cache
-          key: marcap-event-bt-2017-2026-v1
+          key: marcap-hybrid-2016-2026-v1
           restore-keys: |
-            marcap-event-bt-
+            marcap-hybrid-
 
       - name: Build survivorship-aware historical panel
         run: >-
           python research/dante/collect_marcap_full_market.py
-          --start "2017-01-01"
+          --start "2016-01-01"
           --end "2026-09-29"
           --out krx_hybrid
           --cache marcap_event_bt_cache
