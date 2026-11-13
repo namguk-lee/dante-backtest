@@ -220,6 +220,12 @@ def main():
             cases.append(dict(code=code,analysis_date=asof,case_family=kind,
                               label=label,status=origin));continue
         s=canonical_row(hist,asof,kind,origin)
+        # Preserve source identity also when insufficient EMA448 history skips feature calculations.
+        s.setdefault("code",code)
+        s.setdefault("name",name)
+        s.setdefault("date",asof)
+        s.setdefault("case_family",kind)
+        s.setdefault("source",origin)
         s["case_id"]=code+"_"+asof;s["analysis_date"]=asof
         s["source_label_type"]=label;s["official_description"]=description
         s["official_source_url"]="https://contents.premium.naver.com/jusikdante/jusikdante1/contents/"+key
