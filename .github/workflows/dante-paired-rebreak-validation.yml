@@ -1,0 +1,71 @@
+name: Dante paired breakout vs pullback rebreakout (research)
+
+on:
+  push:
+    branches:
+      - agent/dante-base-v3-validation-20261113
+    paths:
+      - .github/workflows/dante-paired-rebreak-validation.yml
+      - research/dante/dante_breakout_vs_rebreak_paired.py
+      - research/dante/dante_base_v4_daily_backtest.py
+  workflow_dispatch:
+
+jobs:
+  paired:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - name: Restore historical cross-sectional cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_full_cache
+          key: marcap-v4-full-2016-2026-v1
+          restore-keys: |
+            marcap-v4-full-
+            marcap-hybrid-
+            marcap-
+      - name: Rebuild historical KOSPI/KOSDAQ data with delisted episodes
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-12"
+          --out paired_market
+          --cache marcap_full_cache
+      - name: Regenerate all V4 original signal parents on SAME panel
+        run: >-
+          python research/dante/dante_base_v4_daily_backtest.py
+          --ko paired_market/ko_eod.parquet
+          --kq paired_market/kq_eod.parquet
+          --out original_v4
+      - name: Compare breakout vs delayed confirmation on paired events
+        run: >-
+          python research/dante/dante_breakout_vs_rebreak_paired.py
+          --ko paired_market/ko_eod.parquet
+          --kq paired_market/kq_eod.parquet
+          --parent original_v4/signals.csv
+          --out paired_comparison
+      - name: Print decision evidence
+        if: success()
+        run: |
+          echo '### Paired EMA224 breakout vs verified pullback/rebreak (research, NOT trades)' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Identical parent events; stock/profile cooldown 60 sessions; non-fills held as cash for intention-to-treat; baseline and waited returns share the parent start date horizon.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'TRAIN 2018–2021, VALID 2022–2024, already-reviewed TEST 2025–2026. Cost 40bp. Approximated corporate-action adjustment.' >> "$GITHUB_STEP_SUMMARY"
+          cat paired_comparison/summary_by_split.csv >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload auditable paired results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-paired-rebreak-results-${{ github.run_number }}
+          retention-days: 30
+          path: |
+            paired_comparison/
+            original_v4/summary_setups.csv
