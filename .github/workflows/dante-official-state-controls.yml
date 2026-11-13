@@ -1,0 +1,63 @@
+name: Dante official article state vs event and matched controls
+
+on:
+  push:
+    branches:
+      - agent/dante-independent-indicators-20261114
+    paths:
+      - .github/workflows/dante-official-state-controls.yml
+      - research/dante/dante_official_state_vs_event.py
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: marcap_weekly_cache
+          key: marcap-official-case-state-2016-2026-v1
+          restore-keys: |
+            marcap-independent-2016-2026-
+            marcap-independent-
+            marcap-
+      - name: Build historical price panel with issuer episodes
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-13"
+          --out market
+          --cache marcap_weekly_cache
+          --refresh-end-year
+          --freshen-with-naver
+          --naver-workers 20
+          --max-stale-calendar-days 2
+      - name: Test state vs event and compare unlabeled same-date controls
+        run: >-
+          python research/dante/dante_official_state_vs_event.py
+          --ko market/ko_eod.parquet
+          --kq market/kq_eod.parquet
+          --out state_audit
+          --controls-per-case 20
+      - name: Summarize descriptive state comparison
+        if: success()
+        run: |
+          echo '### Public dated context vs state/event study; market controls are unlabeled, NOT paid-indicator negatives' >> "$GITHUB_STEP_SUMMARY"
+          cat state_audit/case_vs_market_prevalence.csv >> "$GITHUB_STEP_SUMMARY"
+          cat state_audit/liquidity_gate_sensitivity.csv >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dante-state-event-controls-${{ github.run_number }}
+          path: state_audit/
+          retention-days: 30
