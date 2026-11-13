@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from dante_independent_indicator_suite import prepare, event_tests
+import FinanceDataReader as fdr
 
 ROOT="https://contents.premium.naver.com/jusikdante/jusikdante1/contents/"
 # Printed analysis date may be much earlier than the later retrospective post.
@@ -58,6 +59,10 @@ def asof_probe(g,case):
        avg_turnover_prior20=int(bar.preamount20) if pd.notna(bar.preamount20) else 0,
        meets_current_50e_gate=bool(pd.notna(bar.preamount20) and bar.preamount20>=5e9),
        year_to_analysis_date_gap=(asof-bar.date).days)
+    if (asof-bar.date).days>7:
+        rec.update(status="STALE_PRICE_SERIES",proxy_fired_same_day=False,
+                   proxy_fired_in_last20=False,matching_proxy_dates="",all_recent_proxies="")
+        return rec
     if idx<560:
         rec.update(status="SHORT_EPISODE_LT560",proxy_fired_same_day=False,
                    proxy_fired_in_last20=False,matching_proxy_dates="",all_recent_proxies="")
@@ -75,7 +80,7 @@ def asof_probe(g,case):
        ema5=float(bar.ema5),sma5=float(bar.sma5),
        ema112=float(bar.ema112),ema224=float(bar.ema224),
        ema448=float(bar.ema448),
-       ema5_delta_pct=float(100*(bar.ema5/bar.ema5.shift(1)-1)) if False else float(100*(bar.ema5/z.ema5.iloc[idx-1]-1)),
+       ema5_delta_pct=float(100*(bar.ema5/z.ema5.iloc[idx-1]-1)),
        ema5_upturn_today=bool(bar.ema5_upturn),
        sma5_upturn_today=bool(bar.sma5_upturn),
        close_above_ema112=bool(bar.ac>=bar.ema112),
@@ -93,6 +98,39 @@ def asof_probe(g,case):
        all_recent_proxies=" | ".join(m+":"+",".join(ds) for m,ds in all20.items()),
     )
     return rec
+
+def direct_naver_history(code, name, asof):
+    """Source-isolated recovery ONLY for symbols stale in marcap: no silent join.
+
+    Naver via FinanceDataReader may use different price adjustment conventions.
+    All resulting rows are explicitly tagged vendor=FDR_NAVER and derived EMA
+    values must not be compared to broker adjusted lines without verification.
+    """
+    start="2017-01-01"
+    end=str((pd.Timestamp(asof)+pd.Timedelta(days=1)).date())
+    q=fdr.DataReader("NAVER:"+code,start,end)
+    if q is None or q.empty:
+        raise RuntimeError("no Naver historical OHLCV")
+    q=q.reset_index()
+    q.columns=[str(x).lower() for x in q.columns]
+    required=["date","open","high","low","close","volume"]
+    if any(k not in q.columns for k in required):
+        raise RuntimeError("Naver columns invalid: "+str(q.columns.tolist()))
+    q["date"]=pd.to_datetime(q.date,errors="coerce")
+    for k in required[1:]:
+        q[k]=pd.to_numeric(q[k],errors="coerce")
+    q=q.dropna(subset=required).sort_values("date")
+    q=q[(q.date<=pd.Timestamp(asof))&(q.close>0)&(q.volume>=0)]
+    if len(q)<560:raise RuntimeError("Naver less than 560 sessions")
+    if (pd.Timestamp(asof)-q.date.max()).days>7:
+        raise RuntimeError("Naver stale last date "+str(q.date.max()))
+    q["series_id"]="NAVER_"+code
+    q["code"]=code
+    q["name"]=name
+    q["exchange"]="KO_OR_KQ_EXTERNAL"
+    q["adjusted_close"]=q.close.astype(float)
+    q["amount"]=q.close*q.volume
+    return q
 
 def main():
     p=argparse.ArgumentParser()
@@ -115,9 +153,22 @@ def main():
                                source_url=ROOT+key,status="NO_MARKET_EPISODE"));continue
         latest=q.sort_values("date").iloc[-1]
         g=panel[panel.series_id.eq(latest.series_id)].copy()
+        origin="MARCAP_RESEARCH"
+        stale_days=(pd.Timestamp(anal)-latest.date).days
+        note=""
+        if stale_days>7:
+            try:
+                g=direct_naver_history(code,name,anal)
+                origin="FDR_NAVER_FALLBACK"
+                note=f"MARCAP_PRIOR_LAST_DATE={latest.date.date()}"
+            except Exception as exc:
+                note="NAVER_RECOVERY_FAILED: "+repr(exc)[:200]
         r=asof_probe(g,case)
+        r["data_origin"]=origin
+        r["source_recovery_note"]=note
         output.append(r)
-        print(code,name,anal,r["status"],"liquid",r.get("meets_current_50e_gate"),
+        print(code,name,anal,r["status"],"source",origin,
+              "liquid",r.get("meets_current_50e_gate"),
               "proxy20",r.get("proxy_fired_in_last20"),flush=True)
     audit=pd.DataFrame(output)
     audit.to_csv(args.out/"official_examples_asof_replay.csv",index=False,encoding="utf-8-sig")
@@ -125,7 +176,7 @@ def main():
     a=official_valid[official_valid.status.eq("REPLAY_READY")]
     s=dict(
        official_cited_cases=len(audit),
-       strict_asof_comparable_cases=len(official_valid),
+       contextually_comparable_cases=len(official_valid),
        with_sufficient_history=len(a),
        with_proxy_in_20trading_days=int(a.proxy_fired_in_last20.sum()) if len(a) else 0,
        with_proxy_same_day=int(a.proxy_fired_same_day.sum()) if len(a) else 0,
