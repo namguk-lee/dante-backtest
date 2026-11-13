@@ -151,7 +151,7 @@ def test_logic():
            g=pd.DataFrame({"date":pd.bdate_range("2024-01-01",periods=n)}))
     w,reason=wait_signal(d,i,"REBREAK_3D")
     assert reason=="filled" and w and w["entry_i"]==i+6, (reason,w)
-    no=dict(d);no["vol"]=vol.copy();no["vol"][i+2:i+4]=500
+    no=dict(d);no["vol"]=vol.copy();no["vol"][i+2:i+6]=500
     w2,_=wait_signal(no,i,"REBREAK_3D")
     assert w2 is None, "heavy-volume pullback incorrectly recognized"
     plan=dict(entry_i=i+6,entry=104.,stop=98.,target=116.)
