@@ -198,8 +198,19 @@ def main():
             if r.code in seen:continue
             seen.add(r.code);chosen.append(r.code)
             if len(chosen)>=22:break
-    x=market[market.code.isin(chosen)&market.date.between("2026-01-01","2026-11-13")].copy()
-    x.to_csv(args.out/"selected_new_ohlcv.csv",index=False,encoding="utf-8-sig")
+    groups=[]
+    for sid,g in market[market.code.isin(chosen)].groupby("series_id",sort=False):
+        g=g.sort_values("date").copy()
+        fac=(g.adjusted_close/g.close).replace([np.inf,-np.inf],np.nan).ffill().bfill()
+        g["adj_open"]=g.open*fac
+        g["adj_high"]=g.high*fac
+        g["adj_low"]=g.low*fac
+        for n in (3,5,112,224,448):
+            g[f"ema{n}"]=g.adjusted_close.ewm(span=n,adjust=False,min_periods=n).mean()
+        g=g[g.date.between("2026-01-01","2026-11-13")].copy()
+        if not g.empty:groups.append(g)
+    pd.concat(groups,ignore_index=True).to_csv(
+        args.out/"selected_new_ohlcv.csv",index=False,encoding="utf-8-sig")
     print("PANEL_TO",market.date.max(),"TOTAL_EVENTS",len(df),"WEEK_NEW",len(w),flush=True)
     print("WEEK COUNTS\n",w.groupby(["date","signal"]).size().to_string(),flush=True)
     print("HISTORICAL (UNOPTIMIZED)\n",summary.to_string(index=False),flush=True)
