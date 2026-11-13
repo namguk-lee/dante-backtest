@@ -223,7 +223,8 @@ def main():
         s["case_id"]=code+"_"+asof;s["analysis_date"]=asof
         s["source_label_type"]=label;s["official_description"]=description
         s["official_source_url"]="https://contents.premium.naver.com/jusikdante/jusikdante1/contents/"+key
-        s["exchange_code"]=str(hist.exchange.iloc[-1])
+        prior=panel[panel.code.eq(code)&panel.date.le(pd.Timestamp(asof))]
+        s["exchange_code"]=str(prior.exchange.iloc[-1]) if not prior.empty else str(hist.exchange.iloc[-1])
         cases.append(s)
         if s.get("status")!="REPLAY_READY":
             print("case",code,"unusable",s.get("status"),flush=True)
