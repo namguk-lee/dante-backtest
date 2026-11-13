@@ -19,6 +19,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from matplotlib import font_manager
 
 EMA_PERIODS=(3,5,15,20,33,56,60,112,224,448)
 HORIZON=20
@@ -100,6 +101,9 @@ def prepare(group):
         mid=z.ac.rolling(n,min_periods=n).mean()
         sd=z.ac.rolling(n,min_periods=n).std(ddof=0)
         z[f"bb{n}top"]=mid+2*sd
+    # Past-only shifted BB20 hypothesis (third-party 20-2-26): the plotted
+    # value on day t uses the upper band known on day t-26, never future bars.
+    z["bb20shift26_proxy"]=z.bb20top.shift(26)
     # Standard ATR channel proxy, NOT 'blue dotted line'.
     mid=z.ac.ewm(span=35,adjust=False,min_periods=35).mean()
     z["atr_channel_top_proxy"]=mid+2*z.atr14
@@ -232,6 +236,7 @@ def scan_group(g,min_amount):
                    close_position_pct=round(float(100*r.closepos),2),
                    bb20_upper_proxy=float(r.bb20top/factor) if np.isfinite(r.bb20top) else np.nan,
                    bb35_upper_proxy=float(r.bb35top/factor) if np.isfinite(r.bb35top) else np.nan,
+                   bb20shift26_proxy=float(r.bb20shift26_proxy/factor) if np.isfinite(r.bb20shift26_proxy) else np.nan,
                    bb40_upper_proxy=float(r.bb40top/factor) if np.isfinite(r.bb40top) else np.nan,
                    psar_standard=float(r.psar_standard/factor),
                    base_days=b["days"] if b else np.nan,
@@ -277,6 +282,7 @@ def build_chart(g,ev,out):
     avwap=(price*v).cumsum()/v.cumsum().replace(0,np.nan)
     ax.plot(avwap/f,lw=3.1,color="#f59b24",label="DAILY AVWAP (visible start)")
     ax.plot(t.bb35top/f,lw=1.25,color="#8d7be7",ls=":",label="BB35 upper PROXY")
+    ax.plot(t.bb20shift26_proxy/f,lw=1.3,color="#4994cf",ls="--",label="BB20 upper +26 past PROXY")
     ax.scatter([len(t)-1],[z.ac.iloc[i]/f],marker="^",s=190,color="#e5aa31",
                edgecolors="#72470c",linewidth=1.3,zorder=12)
     ax.annotate(f"{ev['model']}\n{ev['date']}",(len(t)-1,z.ac.iloc[i]/f),
@@ -323,6 +329,10 @@ def main():
     p.add_argument("--max-charts",type=int,default=12)
     p.add_argument("--test-only",action="store_true")
     args=p.parse_args()
+    fonts=[f for f in font_manager.findSystemFonts() if "nanumgothic" in f.lower()]
+    if fonts:
+        plt.rcParams["font.family"]=font_manager.FontProperties(fname=fonts[0]).get_name()
+        plt.rcParams["axes.unicode_minus"]=False
     self_test()
     if args.test_only:
         print("SELF_TEST_PASSED",flush=True);return
