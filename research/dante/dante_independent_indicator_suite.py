@@ -193,15 +193,28 @@ def event_tests(z,i):
 def scan_group(g,min_amount):
     z=prepare(g)
     if len(z)<560:return [],[]
-    events=[];cov=[]
+    events=[]
+    # Week coverage means actual eligible price histories, not signal dates.
+    weekmask=z.date.between(WEEK_FROM,WEEK_END)
+    cov=[(str(t.date()),str(code).zfill(6))
+         for t,code in zip(z.loc[weekmask,"date"],z.loc[weekmask,"code"])]
+    # All public proxy event predicates require at least one of these precursors.
+    # Vector prefilter skips impossible bars without skipping any signal family.
+    active=(
+        z.ema5_upturn | z.sma5_upturn |
+        ((z.ema5>z.ema112)&(z.ema5.shift(1)<=z.ema112.shift(1))) |
+        ((z.ac>=z.ema112)&(z.ac.shift(1)<z.ema112.shift(1))) |
+        ((z.ac>z.ema224)&(z.ac.shift(1)<=z.ema224.shift(1))) |
+        ((z.ac>z.prev20hi)&(z.volratio>=1.6)) |
+        ((z.ac>z.prev5hi)&(z.volratio>=1.1))
+    )
+    active=active.fillna(False)&z.date.ge(START)&z.preamount20.ge(min_amount)
+    candidate_idx=np.flatnonzero(active.to_numpy())
     last={name:-10_000 for name in SECTIONS}
-    for i in range(560,len(z)):
+    for i in candidate_idx:
+        if i<560:continue
         date=pd.Timestamp(z.date.iloc[i])
-        if date<START:continue
         r=z.iloc[i]
-        if WEEK_FROM<=date<=WEEK_END:
-            cov.append((str(date.date()),str(r.code).zfill(6)))
-        if not np.isfinite(r.preamount20) or r.preamount20<min_amount:continue
         for name,why,b in event_tests(z,i):
             if i-last[name]<COOLDOWN:continue
             last[name]=i
