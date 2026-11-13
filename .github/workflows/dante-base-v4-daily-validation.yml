@@ -1,0 +1,62 @@
+name: Dante base V4 daily multi-year validation (research)
+
+on:
+  push:
+    branches:
+      - agent/dante-base-v3-validation-20261113
+    paths:
+      - .github/workflows/dante-base-v4-daily-validation.yml
+      - research/dante/dante_base_v4_daily_backtest.py
+  workflow_dispatch:
+
+jobs:
+  daily-study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - name: Dependencies
+        run: pip install -r research/dante/requirements.txt
+      - name: Restore historical marcap cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_full_cache
+          key: marcap-v4-full-2016-2026-v1
+          restore-keys: |
+            marcap-hybrid-
+            marcap-full-
+            marcap-
+      - name: Rebuild historical cross-section with delisted episodes
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-12"
+          --out v4_market
+          --cache marcap_full_cache
+      - name: Validate daily signals and actual stop/target paths
+        run: >-
+          python research/dante/dante_base_v4_daily_backtest.py
+          --ko v4_market/ko_eod.parquet
+          --kq v4_market/kq_eod.parquet
+          --out v4_daily_results
+      - name: Summarize evidence
+        if: success()
+        run: |
+          echo '### Research-only daily signal count, next-open fills and 2R structural exits' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Training 2018-21, validation 2022-24, seen test 2025-26. Costs 40bp; research adjusted OHLC; no independent forward OOS yet.' >> "$GITHUB_STEP_SUMMARY"
+          head -n 30 v4_daily_results/signal_counts.csv >> "$GITHUB_STEP_SUMMARY"
+          head -n 30 v4_daily_results/summary_splits.csv >> "$GITHUB_STEP_SUMMARY"
+      - name: Store reproducible outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-v4-daily-validation-${{ github.run_number }}
+          retention-days: 30
+          path: v4_daily_results/
