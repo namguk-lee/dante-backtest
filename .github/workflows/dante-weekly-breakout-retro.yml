@@ -1,0 +1,63 @@
+name: Dante full-market weekly breakout retrospective 2026-11-13
+
+on:
+  push:
+    branches:
+      - agent/dante-weekly-review-20261113
+    paths:
+      - .github/workflows/dante-weekly-breakout-retro.yml
+      - research/dante/dante_week_20261113_full_scan.py
+  workflow_dispatch:
+
+jobs:
+  week:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: marcap_weekly_cache
+          key: marcap-weekly-review-2023-2026-v1
+          restore-keys: |
+            marcap-classic-
+            marcap-event-
+            marcap-
+      - name: Collect KOSPI/KOSDAQ market episodes through 2026-11-13
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2023-01-01"
+          --end "2026-11-13"
+          --out weekly_market
+          --cache marcap_weekly_cache
+          --refresh-end-year
+          --freshen-with-naver
+          --naver-workers 20
+          --max-stale-calendar-days 2
+      - name: Full-market all-day breakout candidate scan and chart render
+        run: >-
+          python research/dante/dante_week_20261113_full_scan.py
+          --ko weekly_market/ko_eod.parquet
+          --kq weekly_market/kq_eod.parquet
+          --out weekly_review
+      - name: Summary and data provenance
+        if: success()
+        run: |
+          echo '### 2026-11-09 to 2026-11-13 retrospective KOSPI/KOSDAQ public-Dante pattern scan' >> "$GITHUB_STEP_SUMMARY"
+          cat weekly_review/META.txt >> "$GITHUB_STEP_SUMMARY"
+          cat weekly_review/daily_coverage.csv >> "$GITHUB_STEP_SUMMARY"
+          cat weekly_review/signal_counts.csv >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dante-weekly-new-breakouts-${{ github.run_number }}
+          path: weekly_review/
+          retention-days: 30
