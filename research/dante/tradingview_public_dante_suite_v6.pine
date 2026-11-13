@@ -64,6 +64,8 @@ hillProxy=not na(lastHill) and hillAge>=5 and hillAge<=18 and close>lastHill and
 vwapBase = math.sum(hlc3*volume,baseLen) / math.max(math.sum(volume,baseLen),1.0)
 // This is a rolling DAILY VWAP window, not session VWAP or proprietary AVWAP.
 bb35=ta.sma(close,35)+2*ta.stdev(close,35)
+// Third-party 20-2-26 hypothesis: show only historical BB20 upper from 26 bars ago.
+bb20Shift26=ta.sma(close,20)[26]+2*ta.stdev(close,20)[26]
 psar=ta.sar(0.02,0.02,0.2)
 riskLine=math.min(ta.lowest(low[1],15),ema224)
 
@@ -75,6 +77,7 @@ plot(ema112,"EMA112",color.new(color.aqua,0),2)
 plot(ema224,"EMA224",color.new(color.purple,0),3)
 plot(ema448,"EMA448",color.new(color.gray,0),2)
 plot(showBB ? bb35 : na,"BB35 upper (research PROXY)",color.fuchsia,2,plot.style_circles)
+plot(showBB ? bb20Shift26 : na,"BB20 upper shifted 26 (research PROXY)",color.blue,2,plot.style_circles)
 plot(showSar ? psar : na,"Standard PSAR (NOT Dante)",color.gray,2,plot.style_cross)
 plot(showAVWAP ? vwapBase : na,"60-day daily volume-weighted mean",color.orange,4)
 plot(showRisk ? riskLine : na,"Structural support (research)",color.new(color.red,40),1)
