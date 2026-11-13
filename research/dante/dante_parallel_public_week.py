@@ -72,7 +72,7 @@ def scan_one(g, min_turnover, recent_only=False):
     dates=pd.to_datetime(z.date)
     last={typ:-100000 for typ in TYPES}
     ev=[];coverage=[]
-    for i in range(HIST_MIN,len(z)-1):
+    for i in range(HIST_MIN,len(z)):
         day=dates.iat[i]
         if day<START:continue
         inweek=WSTART<=day<=WEND
