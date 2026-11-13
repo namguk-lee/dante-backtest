@@ -1,0 +1,60 @@
+name: Dante V4 annotated candlestick trade charts
+
+on:
+  push:
+    branches:
+      - agent/dante-base-v3-validation-20261113
+    paths:
+      - .github/workflows/dante-v4-trade-charts.yml
+      - research/dante/dante_v4_trade_charts.py
+      - research/dante/dante_v4_selected_2026_signals.csv
+  workflow_dispatch:
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - name: Install data and plot dependencies
+        run: |
+          pip install -r research/dante/requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-nanum
+      - name: Restore full-market cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_full_cache
+          key: marcap-v4-full-2016-2026-v1
+          restore-keys: |
+            marcap-v4-full-
+            marcap-hybrid-
+            marcap-
+      - name: Load same historic and final-price data
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-12"
+          --out chart_market
+          --cache marcap_full_cache
+      - name: Annotate selected 2026 research signals and outcome dates
+        run: >-
+          python research/dante/dante_v4_trade_charts.py
+          --ko chart_market/ko_eod.parquet
+          --kq chart_market/kq_eod.parquet
+          --manifest research/dante/dante_v4_selected_2026_signals.csv
+          --out v4_trade_charts
+      - name: Upload downloadable charts and auditable CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dante-v4-trade-charts-${{ github.run_number }}
+          retention-days: 30
+          path: v4_trade_charts/
