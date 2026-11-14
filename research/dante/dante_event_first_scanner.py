@@ -21,6 +21,7 @@ import FinanceDataReader as fdr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from cap_liquidity import attach_liquidity_features, is_liquid, describe_liquidity
 
 KST=ZoneInfo("Asia/Seoul")
 
@@ -34,6 +35,8 @@ def parse_args():
     p.add_argument("--min-event-body",type=float,default=.035)
     p.add_argument("--min-event-volume-ratio",type=float,default=2.0)
     p.add_argument("--min-turnover",type=float,default=5_000_000_000)
+    p.add_argument("--liquidity-mode",choices=("legacy","cap-relative","observe"),default="legacy",
+                   help="legacy 50e or cap-normalized previous 20d liquidity; no orders")
     p.add_argument("--workers",type=int,default=6)
     p.add_argument("--retries",type=int,default=3)
     return p.parse_args()
@@ -67,14 +70,16 @@ def feat(g):
     g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["below80"]=(g.ac<g.ema224).shift(1).rolling(80,min_periods=80).sum()
-    return g
+    return attach_liquidity_features(g)
 
 def event_mask(z,a):
     return (
         (z.ret1>=a.min_event_return) &
         (z.body>=a.min_event_body) &
         (z.vr>=a.min_event_volume_ratio) &
-        (z.amount20>=a.min_turnover)
+        ((z.amount20>=a.min_turnover) if a.liquidity_mode=="legacy" else (
+         z.adaptive_liquidity_pass if a.liquidity_mode=="cap-relative"
+         else z.pre20_amount_won.gt(0)))
     )
 
 def find_stage1(panel,a):
@@ -94,6 +99,7 @@ def find_stage1(panel,a):
             "base_date":base_date,"event_date":e.date,"event_open":float(e.open),"event_close":float(e.close),
             "event_ret_pct":float(e.ret1*100),"event_body_pct":float(e.body*100),
             "event_volume_ratio":float(e.vr),"event_quality":quality,"event_close_pos":float(e.close_pos),
+            "liquidity_mode":a.liquidity_mode,**describe_liquidity(e),
             "event_upper_wick":float(e.upper_wick),"event_amount20":float(e.amount20),
             "event_above_prior20_high":bool(e.ac>e.prior20_high if pd.notna(e.prior20_high) else False),
             "event_cross224":bool(e.cross224),"event_ema224":float(e.ema224) if pd.notna(e.ema224) else np.nan,
@@ -464,6 +470,7 @@ def main():
             "event_close_pos":float(e.close_pos),
             "event_upper_wick":float(e.upper_wick),
             "event_amount20":float(e.amount20),
+            "liquidity_mode":a.liquidity_mode,**describe_liquidity(e),
             "event_above_prior20_high":bool(e.ac>e.prior20_high if pd.notna(e.prior20_high) else False),
             "event_cross224":bool(e.cross224),
             "event_ema224":float(e.ema224) if pd.notna(e.ema224) else np.nan,
