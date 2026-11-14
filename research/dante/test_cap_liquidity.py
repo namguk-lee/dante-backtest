@@ -70,6 +70,36 @@ class MarketCapTests(unittest.TestCase):
         z=attach_liquidity_features(sample())
         self.assertIn("listed_share_volume_turnover_pct",z.columns)
         self.assertNotIn("free_float_turnover",z.columns)
+    def test_both_scanner_feature_paths_and_gate_modes(self):
+        from types import SimpleNamespace
+        from dante_classic_scanner import feat as classic_feat
+        from dante_event_first_scanner import feat as event_feat, event_mask
+        from cap_liquidity import is_liquid
+        g=sample(cap=5e10,avg=2.5e8,periods=540)
+        g["open"]=g.close*.96
+        g["high"]=g.close*1.03
+        g["low"]=g.close*.95
+        g["adjusted_close"]=g.close
+        g["series_id"]="TEST_E01"
+        g["code"]="009999"
+        g["name"]="SYNTHETIC"
+        g["exchange"]="KO"
+        g.loc[g.index[-1],"amount"]=4.5e9
+        g.loc[g.index[-1],"volume"]=450000
+        cf=classic_feat(g)
+        ef=event_feat(g)
+        self.assertIn("adaptive_liquidity_pass",cf.columns)
+        self.assertIn("adaptive_liquidity_pass",ef.columns)
+        self.assertTrue(is_liquid(cf.iloc[-1],"cap-relative"))
+        self.assertFalse(is_liquid(cf.iloc[-1],"legacy"))
+        args=SimpleNamespace(min_event_return=.05,min_event_body=.035,
+                             min_event_volume_ratio=2.0,min_turnover=5e9,
+                             liquidity_mode="cap-relative")
+        mask=event_mask(ef,args)
+        self.assertEqual(len(mask),len(g))
+        self.assertFalse(bool(mask.iloc[0]))
+        self.assertGreater(float(ef.relative_turnover_pre20_pct.iloc[-1]),.1)
+
     def test_tier_boundaries(self):
         self.assertEqual(market_cap_tier(99_999_999_999.),"SMALL_LT_100B")
         self.assertEqual(market_cap_tier(100_000_000_000.),"MID_100B_TO_1T")
