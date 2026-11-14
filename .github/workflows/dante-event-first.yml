@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/dante-event-first.yml'
       - 'research/dante/dante_event_first_scanner.py'
+      - 'research/dante/cap_liquidity.py'
+      - 'research/dante/collect_marcap_full_market.py'
   workflow_dispatch:
   schedule:
     # 16:20 KST, Monday-Friday (GitHub cron is UTC)
@@ -50,10 +52,23 @@ jobs:
           --min-event-body 0.035
           --min-event-volume-ratio 2.0
           --min-turnover 5000000000
+      - name: Run cap-relative event-first watchlist (research, separate section)
+        run: >-
+          python research/dante/dante_event_first_scanner.py
+          --ko krx_event/ko_eod.parquet
+          --kq krx_event/kq_eod.parquet
+          --out dante_cap_relative_event_results
+          --event-lookback 60
+          --min-event-return 0.05
+          --min-event-body 0.035
+          --min-event-volume-ratio 2.0
+          --liquidity-mode cap-relative
       - name: Upload event-first results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dante-event-first-${{ github.run_number }}
           retention-days: 30
-          path: dante_event_results/
+          path: |
+            dante_event_results/
+            dante_cap_relative_event_results/
