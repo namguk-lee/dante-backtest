@@ -1,0 +1,82 @@
+name: Research market-cap relative liquidity comparison
+
+on:
+  push:
+    branches:
+      - agent/dante-marketcap-liquidity-20261114
+    paths:
+      - .github/workflows/dante-cap-liquidity-audit.yml
+      - research/dante/collect_marcap_full_market.py
+      - research/dante/cap_liquidity.py
+      - research/dante/test_cap_liquidity.py
+      - research/dante/dante_cap_liquidity_compare.py
+      - research/dante/dante_classic_scanner.py
+      - research/dante/dante_event_first_scanner.py
+  workflow_dispatch:
+
+jobs:
+  cap-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - name: Install scientific dependencies
+        run: pip install -r research/dante/requirements.txt
+      - name: Deterministic cap units, no-leakage, and bucket tests
+        run: python research/dante/test_cap_liquidity.py -v
+      - uses: actions/cache@v4
+        with:
+          path: marcap_cap_liquidity_cache
+          key: marcap-cap-relative-2016-2026-v1
+          restore-keys: |
+            marcap-independent-2016-2026-
+            marcap-weekly-review-
+            marcap-
+      - name: Rebuild point-in-time price and actual capitalization panel
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-13"
+          --out market
+          --cache marcap_cap_liquidity_cache
+          --refresh-end-year
+          --freshen-with-naver
+          --naver-workers 20
+          --max-stale-calendar-days 2
+      - name: Assert source columns preserved
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          for path in ("market/ko_eod.parquet","market/kq_eod.parquet"):
+              d=pd.read_parquet(path,columns=["close","marcap","listed_shares"])
+              assert len(d)>100000, (path,len(d))
+              assert d.listed_shares.notna().mean()>.85, (path,d.listed_shares.notna().mean())
+              assert d.marcap.notna().mean()>.85, (path,d.marcap.notna().mean())
+              print(path,len(d),"reported cap",d.marcap.notna().mean(),"listed shares",d.listed_shares.notna().mean())
+          PY
+      - name: Compare OLD 50e and NEW three cap-size thresholds across historical market
+        run: >-
+          python research/dante/dante_cap_liquidity_compare.py
+          --ko market/ko_eod.parquet
+          --kq market/kq_eod.parquet
+          --out cap_liquidity_audit
+      - name: Audit findings
+        if: success()
+        run: |
+          echo '## Capitalization-aware liquidity thresholds (RESEARCH ONLY)' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Same technical strong-candle screen, old 50e vs cap-size-based 20d previous turnover, past-only cap. Not official Dante formula.' >> "$GITHUB_STEP_SUMMARY"
+          cat cap_liquidity_audit/cap_source_quality_audit.csv >> "$GITHUB_STEP_SUMMARY"
+          cat cap_liquidity_audit/comparative_event_screen_outcomes.csv >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dante-marketcap-liquidity-research-${{ github.run_number }}
+          retention-days: 30
+          path: cap_liquidity_audit/
