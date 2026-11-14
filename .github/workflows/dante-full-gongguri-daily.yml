@@ -1,0 +1,68 @@
+name: Dante complete 60 90 Gongguri market-cap daily
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/dante-full-gongguri-daily.yml'
+      - 'research/dante/dante_cap_full_bowl_daily.py'
+      - 'research/dante/dante_classic_scanner.py'
+      - 'research/dante/cap_liquidity.py'
+      - 'research/dante/collect_marcap_full_market.py'
+  workflow_dispatch:
+  schedule:
+    # 17:10 KST, Mon-Fri. Runs do not send duplicate user alerts.
+    - cron: '10 8 * * 1-5'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - name: Restore historical full-market cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_full_gongguri_cache
+          key: marcap-full-gongguri-2016-to-current-v1
+          restore-keys: |
+            marcap-full-gongguri-
+            marcap-cap-relative-
+            marcap-
+      - name: Build 2016-present market data, keep marketcap and listed shares
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --out full_market
+          --cache marcap_full_gongguri_cache
+          --refresh-end-year
+          --freshen-with-naver
+          --naver-workers 20
+          --max-stale-calendar-days 3
+      - name: Separate verified B60/B90 Gongguri + anchor + concrete support
+        run: >-
+          python research/dante/dante_cap_full_bowl_daily.py
+          --ko full_market/ko_eod.parquet
+          --kq full_market/kq_eod.parquet
+          --out full_gongguri_results
+          --max-charts 10
+      - name: Report data status
+        if: success()
+        run: |
+          echo '## Complete Gongguri research, independent from basic strong-volume scan' >> "$GITHUB_STEP_SUMMARY"
+          echo 'BASE_ONLY, BOTH, CAP_ONLY, LEGACY_ONLY. 60/90-day base is not a new daily buy alert. Historical market-cap may be estimated if fresh Naver has no shares.' >> "$GITHUB_STEP_SUMMARY"
+          cat full_gongguri_results/gongguri_cap_tier_counts.csv >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dante-full-gongguri-cap-${{ github.run_number }}
+          retention-days: 30
+          path: full_gongguri_results/

@@ -1,0 +1,90 @@
+name: Research full Gongguri B60 B90 — capitalization liquidity
+
+on:
+  push:
+    branches:
+      - agent/dante-full-bowl-cap-20261114
+    paths:
+      - .github/workflows/dante-full-bowl-cap-validation.yml
+      - research/dante/dante_cap_full_bowl_daily.py
+      - research/dante/dante_cap_bowl_historical.py
+      - research/dante/test_cap_full_bowl.py
+      - research/dante/dante_full_bowl_from_classic_results.py
+      - research/dante/test_full_bowl_postprocess.py
+  workflow_dispatch:
+
+jobs:
+  scan-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - name: Unit-test actual full-Gongguri state and historical score math
+        run: python research/dante/test_cap_full_bowl.py -v
+      - name: Unit-test cross-gate summary and stale cap warnings
+        run: python research/dante/test_full_bowl_postprocess.py -v
+      - uses: actions/cache@v4
+        with:
+          path: cap_bowl_historical_cache
+          key: marcap-full-bowl-cap-2016-2026-v1
+          restore-keys: |
+            marcap-cap-relative-2016-2026-
+            marcap-independent-2016-2026-
+            marcap-
+      - name: Build historical full-market daily bars including marketcap and shares
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-13"
+          --out market
+          --cache cap_bowl_historical_cache
+          --refresh-end-year
+          --freshen-with-naver
+          --naver-workers 20
+          --max-stale-calendar-days 2
+      - name: Verify point-in-time capitalization source coverage
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          for p in ["market/ko_eod.parquet","market/kq_eod.parquet"]:
+              q=pd.read_parquet(p,columns=["date","code","marcap","listed_shares"])
+              assert len(q)>100000, (p,len(q))
+              assert q.marcap.notna().mean()>.85, (p,"cap missing",q.marcap.notna().mean())
+              assert q.listed_shares.notna().mean()>.85, (p,"shares missing",q.listed_shares.notna().mean())
+              print(p,len(q),"cap quality",q.marcap.notna().mean())
+          PY
+      - name: Scan CURRENT 60/90 Gongguri bowl plus anchor, resistance and EMA224
+        run: >-
+          python research/dante/dante_cap_full_bowl_daily.py
+          --ko market/ko_eod.parquet
+          --kq market/kq_eod.parquet
+          --out gongguri_today
+      - name: Scan HISTORICAL B60/B90 first-EMA224, anchor and 2R outcomes
+        run: >-
+          python research/dante/dante_cap_bowl_historical.py
+          --ko market/ko_eod.parquet
+          --kq market/kq_eod.parquet
+          --out gongguri_history
+      - name: Summary
+        if: success()
+        run: |
+          echo '# Independent B60/90 complete Gongguri / cap-relative liquidity research' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Daily base-state is NOT the same as historical next-open V4 2R breakout event. These are research models, not paid-Dante formula or orders.' >> "$GITHUB_STEP_SUMMARY"
+          cat gongguri_today/gongguri_cap_tier_counts.csv >> "$GITHUB_STEP_SUMMARY"
+          cat gongguri_history/b60_b90_2r_target_stop_comparison.csv >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dante-full-gongguri-cap-audit-${{ github.run_number }}
+          retention-days: 30
+          path: |
+            gongguri_today/
+            gongguri_history/
