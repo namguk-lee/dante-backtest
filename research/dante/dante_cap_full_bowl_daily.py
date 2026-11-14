@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from dante_classic_scanner import (feat, load, find_bowl, find_anchor,
-                                  find_concrete, classify_one)
+                                  find_concrete, classify_one, render_chart)
 from cap_liquidity import describe_liquidity
 
 MODES=("legacy","cap-relative")
@@ -118,6 +118,7 @@ def main():
     p.add_argument("--ko",type=Path,required=True)
     p.add_argument("--kq",type=Path,required=True)
     p.add_argument("--out",type=Path,required=True)
+    p.add_argument("--max-charts",type=int,default=8)
     a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     market=pd.concat([load(a.ko,"KO"),load(a.kq,"KQ")],ignore_index=True)
     last_day=pd.Timestamp(market.date.max())
@@ -156,6 +157,26 @@ def main():
        "Recent Naver cap is only price * last <=5 sessions listed shares, marked estimate. "
        "Different anchor days can be selected under each gate. No orders, no future data.\n",
        encoding="utf-8")
+    # Actual raw-price/EMA/bar charts for the strict completed bowls, separate
+    # from mere technical strong candles and invalidated anchor examples.
+    candidates=e[e.cap_anchor].copy()
+    order={"CONCRETE_HOLD":0,"ANCHOR_HELD":1,"ANCHOR_UNHELD":2}
+    candidates["_s"]=candidates.stage_cap.map(order).fillna(9)
+    candidates["_g"]=candidates.comparison.map({"CAP_ONLY":0,"BOTH":1}).fillna(9)
+    chosen=candidates.sort_values(["_s","_g","base_days"],ascending=[True,True,False]).head(a.max_charts)
+    if len(chosen):
+        groups={
+            str(sid):g for sid,g in market[market.series_id.astype(str).isin(
+                set(chosen.series_id.astype(str)))].groupby("series_id",sort=False)
+        }
+        for _,t in chosen.iterrows():
+            try:
+                g=groups[str(t.series_id)]
+                rec,z=classify_one(g,5e9,"cap-relative")
+                if rec is not None:
+                    render_chart(z,rec,a.out/"charts")
+            except Exception as exc:
+                print("CHART_FAILED",t.code,repr(exc),flush=True)
     print("MARKET_LAST",str(last_day.date()),"ACTIVE",len(active),"TESTED",tested,
           "FULL_BOWL",len(e),flush=True)
     print("BY GATE\n",e.comparison.value_counts().to_string(),flush=True)
