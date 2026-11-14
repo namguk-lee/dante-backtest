@@ -1,0 +1,74 @@
+name: Dante independent indicator suite — research validation
+
+on:
+  push:
+    branches:
+      - agent/dante-independent-indicators-20261114
+    paths:
+      - .github/workflows/dante-independent-indicators.yml
+      - research/dante/dante_independent_indicator_suite.py
+  workflow_dispatch:
+
+jobs:
+  indicators:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - name: Dependencies
+        run: |
+          pip install -r research/dante/requirements.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-nanum
+      - name: Standard mathematics and no-lookahead smoke tests
+        run: >-
+          python research/dante/dante_independent_indicator_suite.py
+          --ko /dev/null --kq /dev/null --out /tmp/dante-tests --test-only
+      - name: Historical marcap cache
+        uses: actions/cache@v4
+        with:
+          path: marcap_weekly_cache
+          key: marcap-independent-2016-2026-v1
+          restore-keys: |
+            marcap-weekly-review-
+            marcap-v4-full-
+            marcap-
+      - name: Full-market historical bars through 2026-11-13
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-13"
+          --out market
+          --cache marcap_weekly_cache
+          --refresh-end-year
+          --freshen-with-naver
+          --naver-workers 20
+          --max-stale-calendar-days 2
+      - name: Detect study signals and 20-trading-day outcomes
+        run: >-
+          python research/dante/dante_independent_indicator_suite.py
+          --ko market/ko_eod.parquet
+          --kq market/kq_eod.parquet
+          --out indicator_research
+          --min-amount 5000000000
+          --max-charts 12
+      - name: Audit summary
+        if: success()
+        run: |
+          echo '### Independent indicator study; NOT original paid Dante formula or trading signals' >> "$GITHUB_STEP_SUMMARY"
+          echo 'SMA/EMA, standard BB/ATR/SAR, public-pattern numeric proxies. Korean full market 2018–26; hypothetical next-open to +20 trading-day close minus 40bp.' >> "$GITHUB_STEP_SUMMARY"
+          cat indicator_research/week_counts.csv >> "$GITHUB_STEP_SUMMARY"
+          cat indicator_research/historical_summary.csv >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dante-independent-indicator-study-${{ github.run_number }}
+          retention-days: 30
+          path: indicator_research/

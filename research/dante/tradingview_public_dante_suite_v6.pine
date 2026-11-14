@@ -1,0 +1,110 @@
+//@version=6
+indicator("Dante public-pattern RESEARCH suite (not original VIP)", overlay=true, max_labels_count=300)
+
+// This script is independent research. It does NOT copy undisclosed Dante
+// Blue Dot, Watermelon, Rainbow/Bridge, or proprietary Odori scanner formulas.
+// Alerts are confirmed at daily candle CLOSE, not real-time trade orders.
+// OHLCV prices from TradingView may differ from marcap / brokerage adjustments.
+useResearch = input.bool(true, "Show public-pattern proxy markers", group="Research signals")
+maMode = input.string("EMA", "5-day turn comparison", options=["EMA", "SMA"], group="Research signals")
+baseLen = input.int(60, "Base lookback sessions", minval=40, maxval=150, group="Research signals")
+minVolumeRatio = input.float(1.4, "Volume over PREVIOUS 20 sessions", minval=1.0, maxval=6.0, step=0.1, group="Research signals")
+showBB = input.bool(true, "Show BB35 upper PROXY, not paid Blue Dot", group="Overlays")
+showSar = input.bool(false, "Show standard Parabolic SAR", group="Overlays")
+showAVWAP = input.bool(true, "Show recent-base daily volume-weighted average", group="Overlays")
+showRisk = input.bool(true, "Show recent support only (not order)", group="Overlays")
+
+ema5=ta.ema(close,5)
+ema15=ta.ema(close,15)
+ema33=ta.ema(close,33)
+ema56=ta.ema(close,56)
+ema112=ta.ema(close,112)
+ema224=ta.ema(close,224)
+ema448=ta.ema(close,448)
+sma5=ta.sma(close,5)
+ma5=maMode=="EMA" ? ema5 : sma5
+ema3=ta.ema(close,3)
+priorVol20=ta.sma(volume[1],20)
+vr=priorVol20>0 ? volume/priorVol20 : na
+prior20High=ta.highest(high[1],20)
+prior5High=ta.highest(high[1],5)
+prior80Below=math.sum(close[1]<ema224[1] ? 1.0 : 0.0,80)
+bear=ema112<ema224 and ema224<ema448
+turn=ma5>ma5[1] and ma5[1]<=ma5[2] and close>ma5
+odoriProxy=turn and vr>=minVolumeRatio
+reverseOdoriProxy=odoriProxy and bear and close<ema224
+long256Proxy=ta.crossover(ema5,ema112) and close>=ema112 and close<ema224 and bear and prior80Below>=48
+maHit112Proxy=ta.crossover(close,ema112) and close<ema224 and bear and prior80Below>=48 and vr>=minVolumeRatio
+maHit224Proxy=ta.crossover(close,ema224) and close<ema448 and prior80Below>=48 and vr>=minVolumeRatio
+// A conservative base is explicitly a study proxy, not the paid formula.
+baseHi=ta.highest(close[1],baseLen)
+baseLo=ta.lowest(close[1],baseLen)
+baseSpan=baseLo>0 ? baseHi/baseLo-1 : na
+baseReturn=close[1]/close[baseLen]-1
+priorPeak=ta.highest(high[baseLen],260)
+priorDecline=priorPeak>0 ? close[baseLen]/priorPeak-1 : na
+baseStable=baseSpan<=0.35 and baseReturn>=-0.15 and baseReturn<=0.2 and priorDecline<=-0.2
+body=open>0 ? close/open-1 : na
+closePos=high>low ? (close-low)/(high-low) : na
+concreteProxy=baseStable and close>prior20High and body>=0.025 and
+              closePos>=0.65 and vr>=1.8
+// A confirmed EMA3 local pivot is available only after 2 future bars have
+// elapsed from that pivot. It never moves the alert backward in time.
+piv=ta.pivothigh(ema3,2,2)
+var float lastHill=na
+var int hillIndex=na
+if not na(piv)
+    lastHill:=high[2]
+    hillIndex:=bar_index-2
+hillAge=na(hillIndex) ? na : bar_index-hillIndex
+// A public-inspired hill proxy, NOT the exact 3-day MA hill formula.
+hillProxy=not na(lastHill) and hillAge>=5 and hillAge<=18 and close>lastHill and
+          close>ema224 and close>prior5High and vr>=1.1 and low[1]>=ema224[1]*0.97
+
+vwapBase = math.sum(hlc3*volume,baseLen) / math.max(math.sum(volume,baseLen),1.0)
+// This is a rolling DAILY VWAP window, not session VWAP or proprietary AVWAP.
+bb35=ta.sma(close,35)+2*ta.stdev(close,35)
+// Third-party 20-2-26 hypothesis: show only historical BB20 upper from 26 bars ago.
+bb20Shift26=ta.sma(close,20)[26]+2*ta.stdev(close,20)[26]
+psar=ta.sar(0.02,0.02,0.2)
+riskLine=math.min(ta.lowest(low[1],15),ema224)
+
+plot(ema5,"EMA5",color.new(color.yellow,20),1)
+plot(ema15,"EMA15",color.new(color.yellow,60),1)
+plot(ema33,"EMA33",color.new(color.teal,60),1)
+plot(ema56,"EMA56",color.new(color.teal,35),1)
+plot(ema112,"EMA112",color.new(color.aqua,0),2)
+plot(ema224,"EMA224",color.new(color.purple,0),3)
+plot(ema448,"EMA448",color.new(color.gray,0),2)
+plot(showBB ? bb35 : na,"BB35 upper (research PROXY)",color.fuchsia,2,plot.style_circles)
+plot(showBB ? bb20Shift26 : na,"BB20 upper shifted 26 (research PROXY)",color.blue,2,plot.style_circles)
+plot(showSar ? psar : na,"Standard PSAR (NOT Dante)",color.gray,2,plot.style_cross)
+plot(showAVWAP ? vwapBase : na,"60-day daily volume-weighted mean",color.orange,4)
+plot(showRisk ? riskLine : na,"Structural support (research)",color.new(color.red,40),1)
+
+valid = barstate.isconfirmed and timeframe.isdaily
+plotshape(useResearch and valid and odoriProxy, title="Odori 5-day turn PROXY",
+          style=shape.circle, location=location.belowbar, color=color.teal, size=size.tiny, text="O")
+plotshape(useResearch and valid and reverseOdoriProxy, title="Reverse Odori PROXY",
+          style=shape.triangleup, location=location.belowbar, color=color.blue, size=size.tiny, text="R")
+plotshape(useResearch and valid and long256Proxy, title="EMA5/112/224 256 PROXY",
+          style=shape.diamond, location=location.belowbar, color=color.aqua, size=size.small, text="256")
+plotshape(useResearch and valid and maHit112Proxy, title="New EMA112 recovery PROXY",
+          style=shape.circle, location=location.abovebar, color=color.green, size=size.tiny, text="112")
+plotshape(useResearch and valid and maHit224Proxy, title="New EMA224 recovery PROXY",
+          style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="224")
+plotshape(useResearch and valid and concreteProxy, title="Long base plus anchor breakout PROXY",
+          style=shape.labelup, location=location.belowbar, color=color.orange, text="BASE", textcolor=color.black)
+plotshape(useResearch and valid and hillProxy, title="EMA3 hill rebreak PROXY",
+          style=shape.flag, location=location.abovebar, color=color.fuchsia, text="HILL")
+
+alertcondition(valid and odoriProxy, title="Dante study: 5-day MA upturn",
+               message="Public-pattern research: 5-day MA turn. Confirm symbol and daily close; NOT original Dante.")
+alertcondition(valid and long256Proxy, title="Dante study: 256 long",
+               message="Public-pattern research: EMA5 crossed EMA112 below EMA224. NOT an order.")
+alertcondition(valid and maHit224Proxy, title="Dante study: EMA224 recovery",
+               message="Public-pattern research: EMA224 recovery. NOT an order.")
+alertcondition(valid and concreteProxy, title="Dante study: base breakout",
+               message="Independent research: stable base + 20D high breakout. NOT original VIP indicator.")
+alertcondition(valid and hillProxy, title="Dante study: EMA3 hill rebreak",
+               message="Independent research: EMA3 hill rebreak proxy. NOT the official proprietary signal.")

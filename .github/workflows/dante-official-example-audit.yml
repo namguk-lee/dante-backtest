@@ -1,0 +1,62 @@
+name: Validate independent Dante proxies against dated official examples
+
+on:
+  push:
+    branches:
+      - agent/dante-independent-indicators-20261114
+    paths:
+      - .github/workflows/dante-official-example-audit.yml
+      - research/dante/dante_official_example_replay.py
+  workflow_dispatch:
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: research/dante/requirements.txt
+      - run: pip install -r research/dante/requirements.txt
+      - uses: actions/cache@v4
+        with:
+          path: marcap_weekly_cache
+          key: marcap-independent-2016-2026-v1
+          restore-keys: |
+            marcap-independent-
+            marcap-weekly-review-
+            marcap-
+      - name: Build 2016 to 2026 KOSPI and KOSDAQ retrospective panel
+        run: >-
+          python research/dante/collect_marcap_full_market.py
+          --start "2016-01-01"
+          --end "2026-11-13"
+          --out market
+          --cache marcap_weekly_cache
+          --refresh-end-year
+          --freshen-with-naver
+          --naver-workers 20
+          --max-stale-calendar-days 2
+      - name: Compare public dated cases with separate numerical proxies
+        run: >-
+          python research/dante/dante_official_example_replay.py
+          --ko market/ko_eod.parquet
+          --kq market/kq_eod.parquet
+          --out official_audit
+      - name: Record scope and limitations
+        if: success()
+        run: |
+          echo '### Official-source dated setup audit; NOT original paid screener precision/recall' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Dated article analysis can be different from signal event date. Compare family event in preceding 20 trading days; no hindsight/future OHLCV.' >> "$GITHUB_STEP_SUMMARY"
+          cat official_audit/audit_summary.csv >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dante-public-official-example-audit-${{ github.run_number }}
+          retention-days: 30
+          path: official_audit/
