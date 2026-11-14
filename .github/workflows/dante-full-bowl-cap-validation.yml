@@ -9,6 +9,8 @@ on:
       - research/dante/dante_cap_full_bowl_daily.py
       - research/dante/dante_cap_bowl_historical.py
       - research/dante/test_cap_full_bowl.py
+      - research/dante/dante_full_bowl_from_classic_results.py
+      - research/dante/test_full_bowl_postprocess.py
   workflow_dispatch:
 
 jobs:
@@ -27,6 +29,8 @@ jobs:
       - run: pip install -r research/dante/requirements.txt
       - name: Unit-test actual full-Gongguri state and historical score math
         run: python research/dante/test_cap_full_bowl.py -v
+      - name: Unit-test cross-gate summary and stale cap warnings
+        run: python research/dante/test_full_bowl_postprocess.py -v
       - uses: actions/cache@v4
         with:
           path: cap_bowl_historical_cache
