@@ -11,6 +11,10 @@ import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 from dante_classic_scanner import (feat, load, find_bowl, find_anchor,
                                   find_concrete, classify_one, render_chart)
@@ -34,6 +38,82 @@ def is_full_bowl(b):
         b["bowl2_core_range_pct"]<=.35 and
         abs(b["bowl2_core_net_change_pct"])<=.20
     )
+
+
+
+def draw_bowl_avwap(z, rec, path):
+    """As-of daily candlestick with thick *daily* base-anchored HLC3 VWAP.
+
+    The anchor is the actual BOWL2 start, never a model-optimized offset.
+    This is NOT intraday/session VWAP and not a paid Dante proprietary line.
+    """
+    n=len(z)
+    base_i=int(rec["_idx_base_start"])
+    approach_i=int(rec["_idx_approach"])
+    anchor_i=int(rec["_idx_anchor"])
+    left=max(0,min(base_i,n-210))
+    right=n
+    t=z.iloc[left:right].copy().reset_index(drop=True)
+    scale=float(z.ac.iloc[-1]/z.close.iloc[-1])
+    if not np.isfinite(scale) or scale<=0:raise RuntimeError("Bad adjusted/raw price scale")
+    x=np.arange(len(t))
+    fig,(ax,av)=plt.subplots(2,1,figsize=(16.3,9.2),sharex=True,
+        gridspec_kw={"height_ratios":[4,1]},facecolor="white")
+    for j,r in t.iterrows():
+        up=r.ac>=r.ao
+        color="#d45658" if up else "#357ab1"
+        ax.vlines(j,r.al/scale,r.ah/scale,color=color,linewidth=.8)
+        width=.62
+        body0=min(r.ao,r.ac)/scale
+        height=max(abs(r.ac-r.ao)/scale,.4)
+        ax.add_patch(Rectangle((j-width/2,body0),width,height,
+                       facecolor=color,edgecolor=color,linewidth=.4))
+        av.bar(j,r.volume/1e6,width=.7,color=color,alpha=.85)
+    for p,color,lw in ((112,"#2a9e9c",1.5),(224,"#8b55aa",2.4),
+                       (448,"#66778b",1.5)):
+        ax.plot(x,t[f"ema{p}"]/scale,label=f"EMA{p}",linewidth=lw,color=color)
+    # Cumulated daily HLC3 weighted by actual KRX-listed trading volume from
+    # the base's true first trading day. Never include earlier or future bars.
+    prices=(z.ah+z.al+z.ac)/3
+    v=z.volume.astype(float).clip(lower=0)
+    valid=prices.iloc[base_i:] * v.iloc[base_i:]
+    cumv=v.iloc[base_i:].cumsum().replace(0,np.nan)
+    anchored=pd.Series(np.nan,index=z.index,dtype=float)
+    anchored.iloc[base_i:]=(valid.cumsum()/cumv).to_numpy()
+    ax.plot(x,anchored.iloc[left:right].to_numpy(float)/scale,
+            label="BOWL2 DAILY AVWAP (HLC3 x volume)",color="#f59d2d",linewidth=3.4)
+    for lab,idx,color in (("Base start",base_i,"#40947a"),
+                          ("EMA224 area",approach_i,"#a77b9a"),
+                          ("Anchor",anchor_i,"#c98127")):
+        loc=idx-left
+        if 0<=loc<len(t):
+            ax.axvline(loc,color=color,linestyle="--",alpha=.6,linewidth=1.0,label=lab)
+    if np.isfinite(rec.get("anchor_open",np.nan)):
+        ax.axhline(float(rec["anchor_open"]),color="#b95353",linewidth=1.2,
+                   linestyle=":",alpha=.75,label="Anchor open support")
+    if np.isfinite(rec.get("concrete_resistance",np.nan)):
+        ax.axhline(float(rec["concrete_resistance"]),color="#5e7d92",
+                   linestyle=":",linewidth=1.0,alpha=.7,label="Concrete resistance")
+    ax.set_title(f'{rec["code"]}  Full Gongguri B{rec["bowl2_days"]} | '
+                 f'cap-normalized anchor research',fontsize=15)
+    ax.set_ylabel("KRW price")
+    ax.grid(alpha=.16);av.grid(alpha=.12)
+    ax.legend(loc="upper left",fontsize=8,ncol=3)
+    av.set_ylabel("Million shares")
+    ticks=list(range(0,len(t),max(1,len(t)//9)))
+    if ticks[-1]!=len(t)-1:ticks.append(len(t)-1)
+    av.set_xticks(ticks)
+    av.set_xticklabels([str(t.date.iloc[k].date()) for k in ticks],
+                       rotation=25,ha="right",fontsize=8)
+    fig.text(.02,.015,
+        "Research only. True DAILY HLC3*volume AVWAP from completed Bowl2 start; "
+        "not intraday VWAP. No verified proprietary Dante formula or trade signal.",
+        fontsize=9,color="#45536a")
+    fig.tight_layout(rect=(0,.03,1,.96))
+    path.parent.mkdir(parents=True,exist_ok=True)
+    fig.savefig(path,dpi=135)
+    plt.close(fig)
+    return path
 
 
 def report_episode(g, cutoff):
@@ -175,6 +255,7 @@ def main():
                 rec,z=classify_one(g,5e9,"cap-relative")
                 if rec is not None:
                     render_chart(z,rec,a.out/"charts")
+                    draw_bowl_avwap(z,rec,a.out/"charts"/f"{rec['code']}_B{int(rec['bowl2_days'])}_DAILY_AVWAP.png")
             except Exception as exc:
                 print("CHART_FAILED",t.code,repr(exc),flush=True)
     print("MARKET_LAST",str(last_day.date()),"ACTIVE",len(active),"TESTED",tested,
