@@ -23,8 +23,13 @@ REQUIRED={
 }
 
 def load_validated(path):
-    x=pd.read_csv(path,dtype={"code":str})
+    try:
+        x=pd.read_csv(path,dtype={"code":str})
+    except pd.errors.EmptyDataError:
+        x=pd.DataFrame(columns=sorted(REQUIRED))
     if x.empty:
+        if "date" not in x:x["date"]=pd.Series(dtype="datetime64[ns]")
+        if "anchor_date" not in x:x["anchor_date"]=pd.Series(dtype="datetime64[ns]")
         return x
     missing=REQUIRED-set(x.columns)
     if missing:raise RuntimeError(f"{path}: missing Classic columns {sorted(missing)}")
@@ -57,6 +62,8 @@ def state(d):
 def process(legacy,cap):
     a=load_validated(legacy);b=load_validated(cap)
     dates=set(a.date.dt.strftime("%Y-%m-%d"))|set(b.date.dt.strftime("%Y-%m-%d"))
+    if not dates:
+        return pd.DataFrame(),pd.DataFrame()
     if len(dates)!=1:raise RuntimeError(f"Legacy/Cap snapshot dates do not match: {dates}")
     a=a[strict_full_bowl(a)].copy()
     b=b[strict_full_bowl(b)].copy()
@@ -118,7 +125,6 @@ def main():
     p.add_argument("--out",type=Path,required=True)
     a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True)
     d,s=process(a.legacy,a.cap)
-    names=list(process.__code__.co_varnames)
     cols=["date","code","name","exchange","liquidity_gate","base_type",
           "bowl_2_days","bowl_1_days","core_base_width_pct",
           "prior_ema224_below_days","decline_pct","anchor_date",
