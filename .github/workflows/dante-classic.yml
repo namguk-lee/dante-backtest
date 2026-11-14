@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/dante-classic.yml'
       - 'research/dante/dante_classic_scanner.py'
+      - 'research/dante/cap_liquidity.py'
+      - 'research/dante/collect_marcap_full_market.py'
   workflow_dispatch:
   schedule:
     # 16:35 KST, Monday-Friday (GitHub cron is UTC)
@@ -47,10 +49,20 @@ jobs:
           --out dante_classic_results
           --max-charts 12
           --min-turnover 5000000000
+      - name: Run capitalization-adjusted classic watchlist (research, separate section)
+        run: >-
+          python research/dante/dante_classic_scanner.py
+          --ko krx_classic/ko_eod.parquet
+          --kq krx_classic/kq_eod.parquet
+          --out dante_classic_cap_relative_results
+          --max-charts 8
+          --liquidity-mode cap-relative
       - name: Upload classic results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dante-classic-${{ github.run_number }}
           retention-days: 30
-          path: dante_classic_results/
+          path: |
+            dante_classic_results/
+            dante_classic_cap_relative_results/

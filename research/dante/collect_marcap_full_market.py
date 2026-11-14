@@ -69,7 +69,10 @@ def load_year(path,start,end):
     missing=[c for c in required if c not in x.columns]
     if missing: raise ValueError(f"{path}: missing {missing}; got {list(x.columns)}")
     ratio_col=next((c for c in ["ChagesRatio","ChangesRatio","ChangeRatio"] if c in x.columns),None)
-    keep=required+([ratio_col] if ratio_col else [])
+    # Preserve point-in-time KRX listed-cap / shares for cap-aware research.
+    # Keep raw Marcap unit unresolved: cross-validate with close*Stocks later.
+    capital_cols=[c for c in ("Marcap","Stocks") if c in x.columns]
+    keep=required+capital_cols+([ratio_col] if ratio_col else [])
     x=x[keep].copy()
     x["Date"]=pd.to_datetime(x["Date"],errors="coerce")
     x=x[(x["Date"]>=start)&(x["Date"]<=end)]
@@ -77,6 +80,8 @@ def load_year(path,start,end):
     x=x[x["Market"].isin(["KOSPI","KOSDAQ"])].copy()
     if ratio_col: x=x.rename(columns={ratio_col:"reported_change_pct"})
     else: x["reported_change_pct"]=np.nan
+    for col in ("Marcap","Stocks"):
+        if col not in x:x[col]=np.nan
     return x
 
 def _to_number(value):
@@ -253,8 +258,8 @@ def build_panel(paths,start,end,episode_gap_days,name_change_gap_days,diff_thres
     x=add_episode_ids(x,episode_gap_days,name_change_gap_days)
     x=add_research_adjusted_close(x,diff_threshold)
     x["exchange"]=x["Market"].map({"KOSPI":"KO","KOSDAQ":"KQ"})
-    x=x.rename(columns={"Date":"date","Code":"code","Name":"name","Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume","Amount":"amount"})
-    keep=["series_id","code","exchange","name","date","open","high","low","close","adjusted_close","volume","amount","reported_change_pct","adjustment_bridge"]
+    x=x.rename(columns={"Date":"date","Code":"code","Name":"name","Open":"open","High":"high","Low":"low","Close":"close","Volume":"volume","Amount":"amount","Marcap":"marcap","Stocks":"listed_shares"})
+    keep=["series_id","code","exchange","name","date","open","high","low","close","adjusted_close","volume","amount","marcap","listed_shares","reported_change_pct","adjustment_bridge"]
     return x[keep].sort_values(["series_id","date"]).reset_index(drop=True)
 
 def main():
