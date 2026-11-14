@@ -20,6 +20,7 @@ import FinanceDataReader as fdr
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from cap_liquidity import attach_liquidity_features, is_liquid, describe_liquidity
 
 KST=ZoneInfo("Asia/Seoul")
 
@@ -31,6 +32,8 @@ def parse_args():
     p.add_argument("--out",type=Path,default=Path("dante_classic_results"))
     p.add_argument("--max-charts",type=int,default=8)
     p.add_argument("--min-turnover",type=float,default=5_000_000_000)
+    p.add_argument("--liquidity-mode",choices=("legacy","cap-relative","observe"),default="legacy",
+                   help="legacy 50e; cap-relative point-in-time threshold; observe all with warnings")
     p.add_argument("--workers",type=int,default=8)
     p.add_argument("--retries",type=int,default=3)
     return p.parse_args()
@@ -67,7 +70,7 @@ def feat(g):
     g["cross112"]=(g.ac>g.ema112)&(g.ac.shift(1)<=g.ema112.shift(1))
     g["cross224"]=(g.ac>g.ema224)&(g.ac.shift(1)<=g.ema224.shift(1))
     g["prior20_high"]=g.ah.shift(1).rolling(20,min_periods=20).max()
-    return g
+    return attach_liquidity_features(g)
 
 
 def consecutive_below_before(z,idx,line="ema224"):
@@ -167,14 +170,14 @@ def find_bowl(z):
         "bowl2_core_net_change_pct":core_slope,
     }
 
-def find_anchor(z,bowl,min_turnover):
+def find_anchor(z,bowl,min_turnover,liquidity_mode="legacy"):
     base_start_i=bowl.get("base_start_i",bowl["bottom_i"]); approach_i=bowl["approach_i"]
     start=min(approach_i,max(base_start_i+10,approach_i-90))
     end=min(len(z)-1,approach_i+25)
     cand=[]
     for i in range(start,end+1):
         if any(pd.isna(z.at[i,c]) for c in ["vr","body","close_pos","amt20","ema112"]):continue
-        if float(z.at[i,"amt20"])<min_turnover:continue
+        if not is_liquid(z.iloc[i],liquidity_mode,min_turnover):continue
         if float(z.at[i,"body"])<.035 or float(z.at[i,"vr"])<1.8 or float(z.at[i,"close_pos"])<.60:continue
         crossed112=bool(z.at[i,"cross112"]) or float(z.at[i,"ac"])>float(z.at[i,"ema112"])
         broke20=bool(pd.notna(z.at[i,"prior20_high"]) and z.at[i,"ac"]>z.at[i,"prior20_high"])
@@ -227,11 +230,11 @@ def nearest_prior_resistance(z,cur_i,cur_price):
     return min(prices) if prices else np.nan
 
 
-def classify_one(g,min_turnover):
+def classify_one(g,min_turnover,liquidity_mode="legacy"):
     z=feat(g)
     bowl=find_bowl(z)
     if not bowl:return None,z
-    anchor=find_anchor(z,bowl,min_turnover)
+    anchor=find_anchor(z,bowl,min_turnover,liquidity_mode)
     if not anchor:return None,z
     concrete=find_concrete(z,anchor["anchor_i"])
     cur=z.iloc[-1]
@@ -318,6 +321,9 @@ def classify_one(g,min_turnover):
     rec={
         "series_id":cur.series_id,"code":str(cur.code).zfill(6),"name":cur.get("name",""),"exchange":cur.exchange,
         "date":cur.date,"tier":tier,"state":state,"score":round(score,2),"current_close":cur_price,
+        "liquidity_mode":liquidity_mode,**describe_liquidity(cur),
+        "anchor_liquidity_warning":str(z.at[anchor["anchor_i"],"liquidity_warning"]),
+        "anchor_liquidity_relative_pct":float(z.at[anchor["anchor_i"],"relative_turnover_pre20_pct"]),
         **{f"ema{n}":ema[n] for n in (5,15,33,56,112,224,448)},
         "dist112_pct":dist112*100,"dist224_pct":dist224*100,
         "gap112224_pct":gap112224*100 if pd.notna(gap112224) else np.nan,
@@ -472,7 +478,7 @@ def main():
     coarse=[]; total=len(active)
     for n,(sid,g) in enumerate(panel[panel.series_id.astype(str).isin(active)].groupby("series_id",sort=False),1):
         if len(g)<520:continue
-        rec,z=classify_one(g,a.min_turnover)
+        rec,z=classify_one(g,a.min_turnover,a.liquidity_mode)
         if rec:coarse.append(rec)
         if n%250==0 or n==total:print(f"coarse {n}/{total} candidates={len(coarse)}",flush=True)
 
@@ -495,14 +501,14 @@ def main():
             hist=panel[panel.series_id.eq(old["series_id"])].sort_values("date").copy()
             q,err=res.get(old["series_id"],(pd.DataFrame(),"missing"))
             z=feat(stitch_one(hist,q))
-            rec,_=classify_one(stitch_one(hist,q),a.min_turnover)
+            rec,_=classify_one(stitch_one(hist,q),a.min_turnover,a.liquidity_mode)
             if rec:
                 rec["refresh_error"]=err
                 final_rows.append(rec); chart_inputs.append((rec,z))
     else:
         for old in coarse:
             hist=panel[panel.series_id.eq(old["series_id"])].sort_values("date").copy()
-            rec,z=classify_one(hist,a.min_turnover)
+            rec,z=classify_one(hist,a.min_turnover,a.liquidity_mode)
             if rec:final_rows.append(rec); chart_inputs.append((rec,z))
 
     if not final_rows:
