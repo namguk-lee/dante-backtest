@@ -76,6 +76,8 @@ def report_episode(g, cutoff):
         features[f"{label}_anchor_volume_multiple"]=float(anchor["anchor_volume_ratio"]) if anchor else np.nan
         features[f"{label}_anchor_ret_pct"]=float(anchor["anchor_ret_pct"]*100) if anchor else np.nan
         features[f"{label}_anchor_hold"]=bool(anchor["anchor_alive_strict"]) if anchor else False
+        features[f"{label}_anchor_cap_tier"]=str(z.at[anchor["anchor_i"],"cap_tier"]) if anchor else "NO_ANCHOR"
+        features[f"{label}_anchor_cap_quality"]=str(z.at[anchor["anchor_i"],"market_cap_quality"]) if anchor else "NO_ANCHOR"
         features[f"{label}_anchor_liquidity_pass"]=(
             bool(z.adaptive_liquidity_pass.iloc[anchor["anchor_i"]])
             if anchor and mode=="cap-relative" else
@@ -87,10 +89,10 @@ def report_episode(g, cutoff):
         # Official-style current classic tier, not a recommendation.
         if anchor:
             rr,_=classify_one(g,5e9,mode)
-            features[f"{label}_tier"]=rr["tier"] if rr else "UNKNOWN"
+            features[f"{label}_classic_tier"]=rr["tier"] if rr else "UNKNOWN"
             features[f"{label}_ma_state"]=rr["ma_state"] if rr else "UNKNOWN"
         else:
-            features[f"{label}_tier"]="NONE"
+            features[f"{label}_classic_tier"]="NONE"
             features[f"{label}_ma_state"]="NO_ANCHOR"
     features["comparison"]=(
         "BOTH" if features["legacy_anchor"] and features["cap_anchor"] else
